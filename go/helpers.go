@@ -144,3 +144,24 @@ func GetBoolDefault(config Config, key string, defaultValue bool) bool {
 	}
 	return b
 }
+
+// MustGetFloat extracts a required float64 from config or returns error.
+func MustGetFloat(config Config, key string) (float64, error) {
+	f, ok := GetFloat(config, key)
+	if !ok {
+		return 0, &ConfigError{
+			Field: key,
+			Err:   fmt.Errorf("required float field '%s' is missing or not a number", key),
+		}
+	}
+	return f, nil
+}
+
+// GetFloatDefault extracts a float64 from config or returns the default value.
+func GetFloatDefault(config Config, key string, defaultValue float64) float64 {
+	f, ok := GetFloat(config, key)
+	if !ok {
+		return defaultValue
+	}
+	return f
+}

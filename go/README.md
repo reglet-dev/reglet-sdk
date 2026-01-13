@@ -10,7 +10,7 @@ The Reglet Go SDK provides Go APIs for writing WebAssembly (WASM) plugins for th
 
 - **Full Context Propagation**: Deadlines, cancellation, and values flow to all operations
 - **Memory Management**: Automatic allocation tracking with 100 MB safety limit
-- **Network Operations**: DNS, HTTP, and TCP with explicit API
+- **Network Operations**: DNS, HTTP, TCP, and SMTP with explicit API
 - **Command Execution**: Sandboxed command execution via host
 - **Type-Safe Wire Protocol**: JSON-based ABI with validation
 
@@ -530,15 +530,18 @@ The SDK provides safe config extraction functions to prevent panics from direct 
 hostname, err := sdk.MustGetString(config, "hostname")
 port, err := sdk.MustGetInt(config, "port")
 enabled, err := sdk.MustGetBool(config, "enabled")
+ratio, err := sdk.MustGetFloat(config, "ratio")
 
 // Optional fields with defaults
 timeout := sdk.GetIntDefault(config, "timeout", 30)
 protocol := sdk.GetStringDefault(config, "protocol", "https")
 verbose := sdk.GetBoolDefault(config, "verbose", false)
+threshold := sdk.GetFloatDefault(config, "threshold", 0.5)
 
 // Safe extraction (returns ok=false if missing or wrong type)
 value, ok := sdk.GetString(config, "optional_field")
 number, ok := sdk.GetInt(config, "optional_number")
+decimal, ok := sdk.GetFloat(config, "optional_decimal")
 tags, ok := sdk.GetStringSlice(config, "tags")
 ```
 

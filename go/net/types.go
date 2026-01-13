@@ -1,4 +1,5 @@
-package net
+// Package net provides network operations for Reglet WASM plugins.
+package net //nolint:revive // intentional name to mirror Go stdlib net package
 
 import (
 	"github.com/reglet-dev/reglet-sdk/go/wireformat"

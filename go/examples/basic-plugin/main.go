@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 
 	sdk "github.com/reglet-dev/reglet-sdk/go"
 	_ "github.com/reglet-dev/reglet-sdk/go/log" // Initialize WASM logging
@@ -98,7 +99,7 @@ func (p *BasicPlugin) Check(ctx context.Context, config sdk.Config) (sdk.Evidenc
 		if err != nil {
 			slog.WarnContext(ctx, "Failed to read response body", "error", err)
 		} else {
-			bodyContains = contains(string(body), checkContains)
+			bodyContains = strings.Contains(string(body), checkContains)
 		}
 	}
 
@@ -134,18 +135,4 @@ func (p *BasicPlugin) Check(ctx context.Context, config sdk.Config) (sdk.Evidenc
 	)
 
 	return evidence, nil
-}
-
-// contains checks if substr is in s (simple implementation).
-func contains(s, substr string) bool {
-	return len(substr) == 0 || (len(s) >= len(substr) && findSubstring(s, substr))
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

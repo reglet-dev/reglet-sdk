@@ -7,7 +7,6 @@ package exec
 import (
 	"context"
 	"errors"
-	"time"
 )
 
 // ErrNotWASM is returned when exec functions are called outside WASM environment.
@@ -24,11 +23,11 @@ type CommandRequest struct {
 
 // CommandResponse contains the result of the command execution.
 type CommandResponse struct {
-	Stdout    string
-	Stderr    string
-	ExitCode  int
-	Duration  time.Duration // Execution duration
-	IsTimeout bool          // True if command timed out
+	Stdout     string
+	Stderr     string
+	ExitCode   int
+	DurationMs int64 // Execution duration in milliseconds
+	IsTimeout  bool  // True if command timed out
 }
 
 // Run is a stub that returns an error when called outside WASM.

@@ -1,4 +1,7 @@
-package context
+// Package context provides context propagation utilities for the Reglet SDK.
+// It handles converting between Go contexts and the wire format used for
+// WASM host function calls.
+package context //nolint:revive // intentional name for internal SDK context utilities
 
 import (
 	stdcontext "context"
@@ -8,12 +11,18 @@ import (
 	"github.com/reglet-dev/reglet-sdk/go/wireformat"
 )
 
+// contextKey is a type alias for context value keys to avoid collisions.
+type contextKey string
+
+// RequestIDKey is the context key for request ID.
+const RequestIDKey contextKey = "request_id"
+
 // contextStore holds the current context for the plugin execution.
 // Since WASM is single-threaded, we can use a simple global variable.
 // The host sets this when calling into the plugin via SetCurrentContext.
 var contextStore = struct {
-	sync.RWMutex
 	ctx stdcontext.Context
+	sync.RWMutex
 }{
 	ctx: stdcontext.Background(),
 }
@@ -63,7 +72,7 @@ func ContextToWire(ctx stdcontext.Context) wireformat.ContextWireFormat {
 	}
 
 	// Extract request ID from context if available
-	if requestID := ctx.Value("request_id"); requestID != nil {
+	if requestID := ctx.Value(RequestIDKey); requestID != nil {
 		if id, ok := requestID.(string); ok {
 			wire.RequestID = id
 		}
@@ -83,17 +92,18 @@ func WireToContext(parent stdcontext.Context, wire wireformat.ContextWireFormat)
 
 	// Apply deadline if present
 	var cancel stdcontext.CancelFunc
-	if wire.Deadline != nil {
+	switch {
+	case wire.Deadline != nil:
 		ctx, cancel = stdcontext.WithDeadline(ctx, *wire.Deadline)
-	} else if wire.TimeoutMs > 0 {
+	case wire.TimeoutMs > 0:
 		ctx, cancel = stdcontext.WithTimeout(ctx, time.Duration(wire.TimeoutMs)*time.Millisecond)
-	} else {
+	default:
 		ctx, cancel = stdcontext.WithCancel(ctx)
 	}
 
 	// Add request ID to context if present
 	if wire.RequestID != "" {
-		ctx = stdcontext.WithValue(ctx, "request_id", wire.RequestID)
+		ctx = stdcontext.WithValue(ctx, RequestIDKey, wire.RequestID)
 	}
 
 	// If context is already Canceled, cancel immediately

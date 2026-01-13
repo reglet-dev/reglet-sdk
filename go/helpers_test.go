@@ -271,3 +271,63 @@ func TestGetIntDefault(t *testing.T) {
 		assert.Equal(t, 443, val)
 	})
 }
+
+func TestMustGetFloat(t *testing.T) {
+	t.Parallel()
+
+	t.Run("success with float64", func(t *testing.T) {
+		t.Parallel()
+		config := sdk.Config{"ratio": float64(3.14)}
+		val, err := sdk.MustGetFloat(config, "ratio")
+		require.NoError(t, err)
+		assert.InDelta(t, 3.14, val, 0.001)
+	})
+
+	t.Run("success with int", func(t *testing.T) {
+		t.Parallel()
+		config := sdk.Config{"ratio": 5}
+		val, err := sdk.MustGetFloat(config, "ratio")
+		require.NoError(t, err)
+		assert.Equal(t, float64(5), val)
+	})
+
+	t.Run("missing key", func(t *testing.T) {
+		t.Parallel()
+		config := sdk.Config{}
+		_, err := sdk.MustGetFloat(config, "ratio")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ratio")
+	})
+
+	t.Run("wrong type", func(t *testing.T) {
+		t.Parallel()
+		config := sdk.Config{"ratio": "not a number"}
+		_, err := sdk.MustGetFloat(config, "ratio")
+		require.Error(t, err)
+	})
+}
+
+func TestGetFloatDefault(t *testing.T) {
+	t.Parallel()
+
+	t.Run("value exists", func(t *testing.T) {
+		t.Parallel()
+		config := sdk.Config{"ratio": float64(2.5)}
+		val := sdk.GetFloatDefault(config, "ratio", 1.0)
+		assert.InDelta(t, 2.5, val, 0.001)
+	})
+
+	t.Run("uses default", func(t *testing.T) {
+		t.Parallel()
+		config := sdk.Config{}
+		val := sdk.GetFloatDefault(config, "ratio", 1.0)
+		assert.Equal(t, 1.0, val)
+	})
+
+	t.Run("wrong type uses default", func(t *testing.T) {
+		t.Parallel()
+		config := sdk.Config{"ratio": "not a float"}
+		val := sdk.GetFloatDefault(config, "ratio", 1.0)
+		assert.Equal(t, 1.0, val)
+	})
+}

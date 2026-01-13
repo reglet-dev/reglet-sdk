@@ -1,5 +1,6 @@
 //go:build wasip1
 
+// Package abi provides memory management for the WASM linear memory.
 package abi
 
 import (
@@ -53,21 +54,28 @@ func allocate(size uint32) uint32 {
 }
 
 // deallocate frees memory by removing the reference from the memory manager,
-// allowing the Go GC to collect it. Decrements totalAllocated by the given size.
+// allowing the Go GC to collect it. Decrements totalAllocated by the actual
+// stored slice length (not the passed size) to prevent counter corruption.
 //
 //go:wasmexport deallocate
 func deallocate(ptr uint32, size uint32) {
 	memoryManager.Lock()
 	defer memoryManager.Unlock()
 
-	if _, exists := memoryManager.ptrs[ptr]; exists {
-		delete(memoryManager.ptrs, ptr)
-		memoryManager.totalAllocated -= int(size)
+	storedSlice, exists := memoryManager.ptrs[ptr]
+	if !exists {
+		return // Ignore untracked pointers (idempotent)
+	}
 
-		// Prevent negative totalAllocated due to double-free or other bugs
-		if memoryManager.totalAllocated < 0 {
-			memoryManager.totalAllocated = 0
-		}
+	// Use actual stored length for accounting, not the caller's size
+	// This prevents counter corruption from mismatched size arguments
+	actualSize := len(storedSlice)
+	delete(memoryManager.ptrs, ptr)
+	memoryManager.totalAllocated -= actualSize
+
+	// Prevent negative totalAllocated due to double-free or other bugs
+	if memoryManager.totalAllocated < 0 {
+		memoryManager.totalAllocated = 0
 	}
 }
 

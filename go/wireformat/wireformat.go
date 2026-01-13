@@ -11,24 +11,24 @@ import (
 // ContextWireFormat is the JSON wire format for context.Context propagation.
 type ContextWireFormat struct {
 	Deadline  *time.Time `json:"deadline,omitempty"`
+	RequestID string     `json:"request_id,omitempty"`
 	TimeoutMs int64      `json:"timeout_ms,omitempty"`
-	RequestID string     `json:"request_id,omitempty"` // For log correlation
-	Canceled  bool       `json:"Canceled,omitempty"`   // True if context is already Canceled
+	Canceled  bool       `json:"Canceled,omitempty"`
 }
 
 // DNSRequestWire is the JSON wire format for a DNS lookup request from Guest to Host.
 type DNSRequestWire struct {
-	Context    ContextWireFormat `json:"context"`
 	Hostname   string            `json:"hostname"`
-	Type       string            `json:"type"`                 // "A", "AAAA", "CNAME", "MX", "TXT", "NS"
-	Nameserver string            `json:"nameserver,omitempty"` // Optional: "host:port"
+	Type       string            `json:"type"`
+	Nameserver string            `json:"nameserver,omitempty"`
+	Context    ContextWireFormat `json:"context"`
 }
 
 // DNSResponseWire is the JSON wire format for a DNS lookup response from Host to Guest.
 type DNSResponseWire struct {
+	Error     *ErrorDetail   `json:"error,omitempty"`
 	Records   []string       `json:"records,omitempty"`
 	MXRecords []MXRecordWire `json:"mx_records,omitempty"`
-	Error     *ErrorDetail   `json:"error,omitempty"` // Structured error
 }
 
 // MXRecordWire represents a single MX record.
@@ -39,101 +39,100 @@ type MXRecordWire struct {
 
 // HTTPRequestWire is the JSON wire format for an HTTP request from Guest to Host.
 type HTTPRequestWire struct {
-	Context ContextWireFormat   `json:"context"`
+	Headers map[string][]string `json:"headers,omitempty"`
 	Method  string              `json:"method"`
 	URL     string              `json:"url"`
-	Headers map[string][]string `json:"headers,omitempty"`
-	Body    string              `json:"body,omitempty"` // Base64 encoded for binary, or plain string
-	// TimeoutMs is implied by Context.TimeoutMs
+	Body    string              `json:"body,omitempty"`
+	Context ContextWireFormat   `json:"context"`
 }
 
 // HTTPResponseWire is the JSON wire format for an HTTP response from Host to Guest.
 type HTTPResponseWire struct {
-	StatusCode    int                 `json:"status_code"`
 	Headers       map[string][]string `json:"headers,omitempty"`
-	Body          string              `json:"body,omitempty"`           // Base64 encoded for binary, or plain string
-	BodyTruncated bool                `json:"body_truncated,omitempty"` // True if response body exceeded size limit
-	Error         *ErrorDetail        `json:"error,omitempty"`          // Structured error
+	Error         *ErrorDetail        `json:"error,omitempty"`
+	Body          string              `json:"body,omitempty"`
+	StatusCode    int                 `json:"status_code"`
+	BodyTruncated bool                `json:"body_truncated,omitempty"`
 }
 
 // TCPRequestWire is the JSON wire format for a TCP connection request from Guest to Host.
 type TCPRequestWire struct {
-	Context   ContextWireFormat `json:"context"`
 	Host      string            `json:"host"`
 	Port      string            `json:"port"`
-	TimeoutMs int               `json:"timeout_ms,omitempty"` // Optional timeout in milliseconds
-	TLS       bool              `json:"tls"`                  // Whether to use TLS
+	Context   ContextWireFormat `json:"context"`
+	TimeoutMs int               `json:"timeout_ms,omitempty"`
+	TLS       bool              `json:"tls"`
 }
 
 // TCPResponseWire is the JSON wire format for a TCP connection response from Host to Guest.
 type TCPResponseWire struct {
-	Connected       bool         `json:"connected"`
-	Address         string       `json:"address,omitempty"`
-	RemoteAddr      string       `json:"remote_addr,omitempty"`
-	LocalAddr       string       `json:"local_addr,omitempty"`
-	ResponseTimeMs  int64        `json:"response_time_ms,omitempty"`
-	TLS             bool         `json:"tls,omitempty"`
+	TLSCertNotAfter *time.Time   `json:"tls_cert_not_after,omitempty"`
+	Error           *ErrorDetail `json:"error,omitempty"`
 	TLSVersion      string       `json:"tls_version,omitempty"`
+	LocalAddr       string       `json:"local_addr,omitempty"`
 	TLSCipherSuite  string       `json:"tls_cipher_suite,omitempty"`
 	TLSServerName   string       `json:"tls_server_name,omitempty"`
 	TLSCertSubject  string       `json:"tls_cert_subject,omitempty"`
 	TLSCertIssuer   string       `json:"tls_cert_issuer,omitempty"`
-	TLSCertNotAfter *time.Time   `json:"tls_cert_not_after,omitempty"`
-	Error           *ErrorDetail `json:"error,omitempty"` // Structured error
+	RemoteAddr      string       `json:"remote_addr,omitempty"`
+	Address         string       `json:"address,omitempty"`
+	ResponseTimeMs  int64        `json:"response_time_ms,omitempty"`
+	TLS             bool         `json:"tls,omitempty"`
+	Connected       bool         `json:"connected"`
 }
 
 // SMTPRequestWire is the JSON wire format for an SMTP connection request from Guest to Host.
 type SMTPRequestWire struct {
-	Context   ContextWireFormat `json:"context"`
 	Host      string            `json:"host"`
 	Port      string            `json:"port"`
-	TimeoutMs int               `json:"timeout_ms,omitempty"` // Optional timeout in milliseconds
-	TLS       bool              `json:"tls"`                  // Whether to use TLS (SMTPS on port 465)
-	StartTLS  bool              `json:"starttls"`             // Whether to use STARTTLS (upgrade to TLS)
+	Context   ContextWireFormat `json:"context"`
+	TimeoutMs int               `json:"timeout_ms,omitempty"`
+	TLS       bool              `json:"tls"`
+	StartTLS  bool              `json:"starttls"`
 }
 
 // SMTPResponseWire is the JSON wire format for an SMTP connection response from Host to Guest.
 type SMTPResponseWire struct {
-	Connected      bool         `json:"connected"`
+	Error          *ErrorDetail `json:"error,omitempty"`
 	Address        string       `json:"address,omitempty"`
-	Banner         string       `json:"banner,omitempty"` // SMTP banner message
-	ResponseTimeMs int64        `json:"response_time_ms,omitempty"`
-	TLS            bool         `json:"tls,omitempty"`
+	Banner         string       `json:"banner,omitempty"`
 	TLSVersion     string       `json:"tls_version,omitempty"`
 	TLSCipherSuite string       `json:"tls_cipher_suite,omitempty"`
 	TLSServerName  string       `json:"tls_server_name,omitempty"`
-	Error          *ErrorDetail `json:"error,omitempty"` // Structured error
+	ResponseTimeMs int64        `json:"response_time_ms,omitempty"`
+	Connected      bool         `json:"connected"`
+	TLS            bool         `json:"tls,omitempty"`
 }
 
 // ExecRequestWire is the JSON wire format for an exec request from Guest to Host.
 type ExecRequestWire struct {
-	Context ContextWireFormat `json:"context"`
-	Command string            `json:"command"`
 	Args    []string          `json:"args"`
-	Dir     string            `json:"dir,omitempty"`
 	Env     []string          `json:"env,omitempty"`
+	Command string            `json:"command"`
+	Dir     string            `json:"dir,omitempty"`
+	Context ContextWireFormat `json:"context"`
 }
 
 // ExecResponseWire is the JSON wire format for an exec response from Host to Guest.
 type ExecResponseWire struct {
+	Error      *ErrorDetail `json:"error,omitempty"`
 	Stdout     string       `json:"stdout"`
 	Stderr     string       `json:"stderr"`
 	ExitCode   int          `json:"exit_code"`
-	DurationMs int64        `json:"duration_ms,omitempty"` // Execution duration in milliseconds
-	IsTimeout  bool         `json:"is_timeout,omitempty"`  // True if command timed out
-	Error      *ErrorDetail `json:"error,omitempty"`
+	DurationMs int64        `json:"duration_ms,omitempty"`
+	IsTimeout  bool         `json:"is_timeout,omitempty"`
 }
 
 // ErrorDetail provides structured error information, consistent across host and SDK.
 // Error Types: "network", "timeout", "config", "panic", "capability", "validation", "internal"
 type ErrorDetail struct {
-	Message    string       `json:"message"`
-	Type       string       `json:"type"`                   // "network", "timeout", "config", "panic", "capability", "validation", "internal"
-	Code       string       `json:"code"`                   // "ECONNREFUSED", "ETIMEDOUT", etc.
-	IsTimeout  bool         `json:"is_timeout,omitempty"`   // For network errors
-	IsNotFound bool         `json:"is_not_found,omitempty"` // For network/DNS errors
 	Wrapped    *ErrorDetail `json:"wrapped,omitempty"`
-	Stack      []byte       `json:"stack,omitempty"` // Stack trace for panic errors (SDK only)
+	Message    string       `json:"message"`
+	Type       string       `json:"type"`
+	Code       string       `json:"code"`
+	Stack      []byte       `json:"stack,omitempty"`
+	IsTimeout  bool         `json:"is_timeout,omitempty"`
+	IsNotFound bool         `json:"is_not_found,omitempty"`
 }
 
 // Error implements the error interface for ErrorDetail.

@@ -7,13 +7,23 @@ package sdk
 import (
 	"fmt"
 	"time"
+
+	"github.com/reglet-dev/reglet-sdk/go/wireformat"
 )
+
+// DetailedError is an interface for custom error types that can convert themselves
+// to a structured ErrorDetail. This follows the Open/Closed Principle - new error
+// types only need to implement this interface without modifying ToErrorDetail.
+type DetailedError interface {
+	error
+	ToErrorDetail() *wireformat.ErrorDetail
+}
 
 // NetworkError represents a network operation failure.
 type NetworkError struct {
-	Operation string // "dns_lookup", "http_request", "tcp_connect", etc.
-	Target    string // Hostname, URL, or address
-	Err       error  // Underlying error
+	Err       error
+	Operation string
+	Target    string
 }
 
 func (e *NetworkError) Error() string {
@@ -27,11 +37,16 @@ func (e *NetworkError) Unwrap() error {
 	return e.Err
 }
 
+// ToErrorDetail implements DetailedError.
+func (e *NetworkError) ToErrorDetail() *wireformat.ErrorDetail {
+	return &wireformat.ErrorDetail{Message: e.Error(), Type: "network", Code: e.Operation}
+}
+
 // TimeoutError represents a timeout during an operation.
 type TimeoutError struct {
-	Operation string        // "dns_lookup", "http_request", "exec_command", etc.
-	Duration  time.Duration // How long we waited before timing out
-	Target    string        // Optional: what we were trying to reach
+	Operation string
+	Target    string
+	Duration  time.Duration
 }
 
 func (e *TimeoutError) Error() string {
@@ -43,6 +58,11 @@ func (e *TimeoutError) Error() string {
 
 func (e *TimeoutError) Timeout() bool {
 	return true
+}
+
+// ToErrorDetail implements DetailedError.
+func (e *TimeoutError) ToErrorDetail() *wireformat.ErrorDetail {
+	return &wireformat.ErrorDetail{Message: e.Error(), Type: "timeout", Code: e.Operation, IsTimeout: true}
 }
 
 // CapabilityError represents a capability check failure.
@@ -58,10 +78,15 @@ func (e *CapabilityError) Error() string {
 	return fmt.Sprintf("missing capability: %s", e.Required)
 }
 
+// ToErrorDetail implements DetailedError.
+func (e *CapabilityError) ToErrorDetail() *wireformat.ErrorDetail {
+	return &wireformat.ErrorDetail{Message: e.Error(), Type: "capability", Code: e.Required}
+}
+
 // ConfigError represents a configuration validation error.
 type ConfigError struct {
-	Field string // Field name that failed validation
-	Err   error  // Underlying validation error
+	Err   error
+	Field string
 }
 
 func (e *ConfigError) Error() string {
@@ -75,12 +100,17 @@ func (e *ConfigError) Unwrap() error {
 	return e.Err
 }
 
+// ToErrorDetail implements DetailedError.
+func (e *ConfigError) ToErrorDetail() *wireformat.ErrorDetail {
+	return &wireformat.ErrorDetail{Message: e.Error(), Type: "config", Code: e.Field}
+}
+
 // ExecError represents a command execution error.
 type ExecError struct {
-	Command  string // Command that was executed
-	ExitCode int    // Exit code if command ran
-	Stderr   string // Standard error output
-	Err      error  // Underlying error (if command didn't run)
+	Err      error
+	Command  string
+	Stderr   string
+	ExitCode int
 }
 
 func (e *ExecError) Error() string {
@@ -99,12 +129,17 @@ func (e *ExecError) Unwrap() error {
 	return e.Err
 }
 
+// ToErrorDetail implements DetailedError.
+func (e *ExecError) ToErrorDetail() *wireformat.ErrorDetail {
+	return &wireformat.ErrorDetail{Message: e.Error(), Type: "exec", Code: fmt.Sprintf("exit_%d", e.ExitCode)}
+}
+
 // DNSError represents a DNS lookup failure.
 type DNSError struct {
-	Hostname   string // Hostname that failed to resolve
-	RecordType string // Type of record (A, AAAA, MX, etc.)
-	Nameserver string // Optional: specific nameserver used
-	Err        error  // Underlying error
+	Err        error
+	Hostname   string
+	RecordType string
+	Nameserver string
 }
 
 func (e *DNSError) Error() string {
@@ -127,12 +162,22 @@ func (e *DNSError) Timeout() bool {
 	return false
 }
 
+// ToErrorDetail implements DetailedError.
+func (e *DNSError) ToErrorDetail() *wireformat.ErrorDetail {
+	detail := &wireformat.ErrorDetail{Message: e.Error(), Type: "network", Code: "dns_" + e.RecordType}
+	if e.Timeout() {
+		detail.Type = "timeout"
+		detail.IsTimeout = true
+	}
+	return detail
+}
+
 // HTTPError represents an HTTP request failure.
 type HTTPError struct {
-	Method     string // HTTP method (GET, POST, etc.)
-	URL        string // Request URL
-	StatusCode int    // HTTP status code (0 if request failed before receiving response)
-	Err        error  // Underlying error
+	Err        error
+	Method     string
+	URL        string
+	StatusCode int
 }
 
 func (e *HTTPError) Error() string {
@@ -154,11 +199,21 @@ func (e *HTTPError) Timeout() bool {
 	return false
 }
 
+// ToErrorDetail implements DetailedError.
+func (e *HTTPError) ToErrorDetail() *wireformat.ErrorDetail {
+	detail := &wireformat.ErrorDetail{Message: e.Error(), Type: "network", Code: fmt.Sprintf("http_%d", e.StatusCode)}
+	if e.Timeout() {
+		detail.Type = "timeout"
+		detail.IsTimeout = true
+	}
+	return detail
+}
+
 // TCPError represents a TCP connection failure.
 type TCPError struct {
-	Network string // "tcp", "tcp4", or "tcp6"
-	Address string // Target address (host:port)
-	Err     error  // Underlying error
+	Err     error
+	Network string
+	Address string
 }
 
 func (e *TCPError) Error() string {
@@ -177,10 +232,20 @@ func (e *TCPError) Timeout() bool {
 	return false
 }
 
+// ToErrorDetail implements DetailedError.
+func (e *TCPError) ToErrorDetail() *wireformat.ErrorDetail {
+	detail := &wireformat.ErrorDetail{Message: e.Error(), Type: "network", Code: "tcp_connect"}
+	if e.Timeout() {
+		detail.Type = "timeout"
+		detail.IsTimeout = true
+	}
+	return detail
+}
+
 // SchemaError represents a schema generation or validation error.
 type SchemaError struct {
-	Type string // Go type that failed schema generation
-	Err  error  // Underlying error
+	Err  error
+	Type string
 }
 
 func (e *SchemaError) Error() string {
@@ -192,6 +257,11 @@ func (e *SchemaError) Error() string {
 
 func (e *SchemaError) Unwrap() error {
 	return e.Err
+}
+
+// ToErrorDetail implements DetailedError.
+func (e *SchemaError) ToErrorDetail() *wireformat.ErrorDetail {
+	return &wireformat.ErrorDetail{Message: e.Error(), Type: "validation", Code: "schema"}
 }
 
 // MemoryError represents a memory allocation failure.
@@ -206,11 +276,16 @@ func (e *MemoryError) Error() string {
 		e.Requested, e.Current, e.Limit)
 }
 
+// ToErrorDetail implements DetailedError.
+func (e *MemoryError) ToErrorDetail() *wireformat.ErrorDetail {
+	return &wireformat.ErrorDetail{Message: e.Error(), Type: "internal", Code: "memory_limit"}
+}
+
 // WireFormatError represents a wire format encoding/decoding error.
 type WireFormatError struct {
-	Operation string // "marshal" or "unmarshal"
-	Type      string // Type being encoded/decoded
-	Err       error  // Underlying error
+	Err       error
+	Operation string
+	Type      string
 }
 
 func (e *WireFormatError) Error() string {
@@ -219,4 +294,9 @@ func (e *WireFormatError) Error() string {
 
 func (e *WireFormatError) Unwrap() error {
 	return e.Err
+}
+
+// ToErrorDetail implements DetailedError.
+func (e *WireFormatError) ToErrorDetail() *wireformat.ErrorDetail {
+	return &wireformat.ErrorDetail{Message: e.Error(), Type: "internal", Code: "wire_format"}
 }
