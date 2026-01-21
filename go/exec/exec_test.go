@@ -1,16 +1,106 @@
-//go:build !wasip1
-
 package exec
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/reglet-dev/reglet-sdk/go/domain/entities"
+	"github.com/reglet-dev/reglet-sdk/go/domain/ports"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+// --- Mock CommandRunner ---
+
+type MockCommandRunner struct {
+	mock.Mock
+}
+
+func (m *MockCommandRunner) Run(ctx context.Context, req ports.CommandRequest) (*ports.CommandResult, error) {
+	args := m.Called(ctx, req)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ports.CommandResult), args.Error(1)
+}
+
+// --- Run Functional Tests ---
+
+func TestRun_WithMockRunner(t *testing.T) {
+	mockRunner := new(MockCommandRunner)
+
+	expectedReq := CommandRequest{
+		Command: "echo",
+		Args:    []string{"hello"},
+		Timeout: 30, // default
+	}
+
+	expectedRes := &CommandResponse{
+		Stdout:   "hello\n",
+		ExitCode: 0,
+	}
+
+	mockRunner.On("Run", mock.Anything, expectedReq).Return(expectedRes, nil)
+
+	resp, err := Run(context.Background(), CommandRequest{
+		Command: "echo",
+		Args:    []string{"hello"},
+	}, WithRunner(mockRunner))
+
+	require.NoError(t, err)
+	assert.Equal(t, "hello\n", resp.Stdout)
+	mockRunner.AssertExpectations(t)
+}
+
+func TestRun_WithWorkdir(t *testing.T) {
+	mockRunner := new(MockCommandRunner)
+
+	expectedReq := CommandRequest{
+		Command: "ls",
+		Dir:     "/tmp",
+		Timeout: 30,
+	}
+
+	mockRunner.On("Run", mock.Anything, expectedReq).Return(&CommandResponse{}, nil)
+
+	_, err := Run(context.Background(), CommandRequest{Command: "ls"},
+		WithWorkdir("/tmp"),
+		WithRunner(mockRunner),
+	)
+
+	require.NoError(t, err)
+	mockRunner.AssertExpectations(t)
+}
+
+func TestRun_WithEnv(t *testing.T) {
+	mockRunner := new(MockCommandRunner)
+
+	expectedReq := CommandRequest{
+		Command: "env",
+		Env:     []string{"FOO=bar"},
+		Timeout: 30,
+	}
+
+	mockRunner.On("Run", mock.Anything, expectedReq).Return(&CommandResponse{}, nil)
+
+	_, err := Run(context.Background(), CommandRequest{Command: "env"},
+		WithEnv([]string{"FOO=bar"}),
+		WithRunner(mockRunner),
+	)
+
+	require.NoError(t, err)
+	mockRunner.AssertExpectations(t)
+}
+
+func TestRun_DefaultRunner_PanicsOnNative(t *testing.T) {
+	// This ensures that if we don't inject a mock, we get the stub (on native) which panics
+	assert.PanicsWithValue(t, "WASM Exec adapter not available in native build. Use WithCommandRunner() to inject a mock.", func() {
+		_, _ = Run(context.Background(), CommandRequest{Command: "ls"})
+	})
+}
 
 // --- RunOption Functional Options Tests (T014) ---
 

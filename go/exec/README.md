@@ -1,6 +1,6 @@
 # Exec Package
 
-The `exec` package provides command execution capabilities for Reglet WASM plugins. It allows plugins to execute shell commands on the host system through a sandboxed interface.
+The `exec` package provides command execution capabilities for Reglet WASM plugins. It implements a Hexagonal Architecture that separates domain logic from infrastructure adapters, allowing for easy testing and modularity.
 
 ## Overview
 
@@ -8,10 +8,10 @@ This package wraps the host's command execution functionality, translating Go-st
 
 ## Security Model
 
-- **Requires Capability**: `exec` or `exec:<pattern>` capability grant
-- **Sandboxed**: Commands run in host-controlled environment
-- **No Direct Access**: Plugin cannot directly access host filesystem or processes
-- **Configurable Limits**: Host enforces timeouts, output size limits, and allowed commands
+- **Requires Capability**: `exec` or `exec:<pattern>` capability grant.
+- **Sandboxed**: Commands run in a host-controlled environment.
+- **No Direct Access**: Plugins cannot directly access the host filesystem or processes.
+- **Configurable Limits**: The host enforces timeouts, output size limits, and allowed commands.
 
 ## Basic Usage
 
@@ -20,7 +20,6 @@ package main
 
 import (
     "context"
-    "log"
 
     "github.com/reglet-dev/reglet-sdk/go"
     "github.com/reglet-dev/reglet-sdk/go/exec"
@@ -51,77 +50,40 @@ func (p *MyPlugin) Check(ctx context.Context, config sdk.Config) (sdk.Evidence, 
 
 ## Advanced Usage
 
-### Environment Variables
+### Functional Options
+
+The `Run` function supports functional options for configuration:
 
 ```go
-req := exec.CommandRequest{
-    Command: "env",
-    Env:     []string{"MY_VAR=value", "PATH=/usr/local/bin:/usr/bin:/bin"},
-}
-
-result, err := exec.Run(ctx, req)
+result, err := exec.Run(ctx, req, 
+    exec.WithWorkdir("/var/log"),
+    exec.WithEnv([]string{"DEBUG=true"}),
+    exec.WithExecTimeout(10 * time.Second),
+)
 ```
 
-### Working Directory
+### Mocking for Tests
+
+You can inject a mock runner to unit test your plugin logic without a WASM runtime:
 
 ```go
-req := exec.CommandRequest{
-    Command: "pwd",
-    Dir:     "/var/log",  // Run command in specific directory
-}
+import "github.com/reglet-dev/reglet-sdk/go/domain/ports"
 
-result, err := exec.Run(ctx, req)
+// In your test:
+mockRunner := &MyMockRunner{} // Implements ports.CommandRunner
+result, err := exec.Run(ctx, req, exec.WithRunner(mockRunner))
 ```
 
 ### Timeout Handling
 
-Use Go's context to enforce timeouts:
+Use Go's context or the `WithExecTimeout` option to enforce timeouts:
 
 ```go
-// 5 second timeout
+// 5 second timeout via context
 ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 defer cancel()
 
-req := exec.CommandRequest{
-    Command: "sleep",
-    Args:    []string{"10"},
-    Timeout: 5, // Also set timeout in request
-}
-
 result, err := exec.Run(ctx, req)
-if err != nil {
-    // err will be timeout error if command exceeds 5 seconds
-}
-if result != nil && result.IsTimeout {
-    // Command timed out
-}
-```
-
-### Exit Code Handling
-
-```go
-req := exec.CommandRequest{
-    Command: "grep",
-    Args:    []string{"pattern", "file.txt"},
-}
-
-result, err := exec.Run(ctx, req)
-if err != nil {
-    return sdk.Failure("exec", err.Error()), nil
-}
-
-// Check exit code
-if result.ExitCode != 0 {
-    return sdk.Success(map[string]interface{}{
-        "found":     false,
-        "exit_code": result.ExitCode,
-    }), nil
-}
-
-return sdk.Success(map[string]interface{}{
-    "found":  true,
-    "output": result.Stdout,
-}), nil
 ```
 
 ## API Reference
@@ -145,7 +107,7 @@ type CommandResponse struct {
     Stdout     string // Standard output from command
     Stderr     string // Standard error from command
     ExitCode   int    // Exit code (0 = success)
-    DurationMs int64  // How long the command took to execute in milliseconds
+    DurationMs int64  // Execution duration in milliseconds
     IsTimeout  bool   // True if command timed out
 }
 ```
@@ -155,129 +117,27 @@ type CommandResponse struct {
 #### Run
 
 ```go
-func Run(ctx context.Context, req CommandRequest) (*CommandResponse, error)
+func Run(ctx context.Context, req CommandRequest, opts ...RunOption) (*CommandResponse, error)
 ```
 
 Executes a command on the host system. Returns the command output and metadata, or an error if the command cannot be executed.
 
-**Errors:**
-- `context.DeadlineExceeded`: Command exceeded timeout
-- Capability errors: Plugin lacks required permissions
-- Execution errors: Command not found, permission denied, etc.
+### Options
 
-## Common Patterns
+- `WithWorkdir(dir string)`: Sets the working directory.
+- `WithEnv(env []string)`: Sets environment variables.
+- `WithExecTimeout(d time.Duration)`: Sets the execution timeout.
+- `WithRunner(r ports.CommandRunner)`: Injects a custom runner (useful for testing).
 
-### Checking Service Status
+## Architecture
 
-```go
-req := exec.CommandRequest{
-    Command: "systemctl",
-    Args:    []string{"is-active", "nginx"},
-}
+- **Domain/Ports**: The `CommandRunner` interface is defined in `go/domain/ports`.
+- **Infrastructure/WASM**: The `ExecAdapter` in `go/infrastructure/wasm` implements the port using host functions.
+- **Public API**: The `go/exec` package provides the `Run` function which orchestrates the call, defaulting to the WASM adapter.
 
-result, err := exec.Run(ctx, req)
-if err != nil {
-    return sdk.Failure("exec", err.Error()), nil
-}
-
-isActive := result.ExitCode == 0
-
-return sdk.Success(map[string]interface{}{
-    "service": "nginx",
-    "active":  isActive,
-}), nil
-```
-
-### File Validation
-
-```go
-req := exec.CommandRequest{
-    Command: "test",
-    Args:    []string{"-f", "/etc/passwd"},
-}
-
-result, err := exec.Run(ctx, req)
-if err != nil {
-    return sdk.Failure("exec", err.Error()), nil
-}
-
-fileExists := result.ExitCode == 0
-```
-
-### Parsing Command Output
-
-```go
-req := exec.CommandRequest{
-    Command: "df",
-    Args:    []string{"-h", "/"},
-}
-
-result, err := exec.Run(ctx, req)
-if err != nil {
-    return sdk.Failure("exec", err.Error()), nil
-}
-
-// Parse the output
-lines := strings.Split(result.Stdout, "\n")
-// ... process lines
-```
-
-## Limitations
-
-1. **No Shell Features**: Commands are executed directly, not through a shell. Use explicit commands instead of shell syntax:
-   - ❌ `"ls | grep foo"`
-   - ✅ `exec.Run()` with `"grep"` and pass result of `"ls"` as input
-
-2. **No Interactive Commands**: Commands requiring stdin interaction will hang or fail
-
-3. **Output Size Limits**: Host may truncate very large output (typically 10MB limit)
-
-4. **Command Whitelist**: Host may restrict which commands can be executed via capability patterns
-
-5. **Working Directory**: Host may restrict which directories can be used as working directory
-
-## Best Practices
-
-1. **Use Timeouts**: Always use context with timeout for long-running commands
-2. **Check Exit Codes**: Don't just check for errors, verify exit codes for command success
-3. **Validate Input**: Sanitize any user-provided input used in commands
-4. **Handle Output Size**: Be prepared for truncated output on very large results
-5. **Specify Full Paths**: Use absolute paths for commands when possible (`/usr/bin/ls` vs `ls`)
-6. **Request Minimal Capabilities**: Only request exec capabilities for commands you actually need
-
-## Wire Format
-
-The exec package uses JSON-based wire format to communicate with the host:
-
-```go
-// Request sent to host
-{
-    "context": { /* context metadata */ },
-    "command": "ls",
-    "args": ["-la"],
-    "dir": "/tmp",
-    "env": {"PATH": "..."}
-}
-
-// Response from host
-{
-    "stdout": "...",
-    "stderr": "...",
-    "exit_code": 0,
-    "duration": "100ms",
-    "error": null
-}
-```
-
-## Context Propagation
-
-The exec package fully supports Go context propagation:
-
-- **Cancellation**: Canceled context terminates the running command
-- **Deadlines**: Context deadlines enforce command timeouts
-- **Values**: Context values (like request IDs) are passed to host
+This design ensures the SDK is testable on native environments while providing seamless host integration in WASM.
 
 ## See Also
 
 - [Main SDK Documentation](../README.md)
-- [Plugin Development Guide](../../../docs/plugin-development.md)
+- [Net Package Documentation](../net/README.md)

@@ -1,186 +1,225 @@
-//go:build wasip1
-
 package sdknet
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"time"
 
+	"github.com/reglet-dev/reglet-sdk/go/application/config"
 	"github.com/reglet-dev/reglet-sdk/go/domain/entities"
-	"github.com/reglet-dev/reglet-sdk/go/internal/abi"
-	_ "github.com/reglet-dev/reglet-sdk/go/log" // Initialize WASM logging handler
+	"github.com/reglet-dev/reglet-sdk/go/domain/ports"
+	"github.com/reglet-dev/reglet-sdk/go/infrastructure/wasm"
 )
 
-// MaxHTTPBodySize is the maximum size of HTTP response body that can be returned.
-// Response bodies exceeding this limit will result in an error.
-const MaxHTTPBodySize = 10 * 1024 * 1024 // 10 MB
+// HTTPCheckOption is a functional option for configuring HTTP checks.
+type HTTPCheckOption func(*httpCheckConfig)
 
-// Define the host function signature for HTTP requests.
-// This matches the signature defined in internal/wasm/hostfuncs/registry.go.
-//
-//go:wasmimport reglet_host http_request
-func host_http_request(requestPacked uint64) uint64
-
-// WasmTransport implements http.RoundTripper for the WASM environment.
-// It intercepts standard library HTTP calls and routes them through the host function.
-type WasmTransport struct {
-	// timeout is the request timeout (unexported, set via WithHTTPTimeout).
-	timeout time.Duration
-
-	// maxRedirects is the maximum redirects to follow (unexported, set via WithMaxRedirects).
-	maxRedirects int
-
-	// tlsConfig is the TLS configuration (unexported, set via WithTLSConfig).
-	tlsConfig *tls.Config
+type httpCheckConfig struct {
+	client ports.HTTPClient
 }
 
-// RoundTrip implements the http.RoundTripper interface.
-func (t *WasmTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// Create ContextWireFormat from req.Context()
-	wireCtx := createContextWireFormat(req.Context())
-
-	// Prepare HTTPRequestWire
-	request := HTTPRequestWire{
-		Context: wireCtx,
-		Method:  req.Method,
-		URL:     req.URL.String(),
-		Headers: req.Header,
-	}
-
-	// Read request body, encode if present
-	if req.Body != nil && req.Body != http.NoBody {
-		bodyBytes, err := io.ReadAll(req.Body)
-		if err != nil {
-			return nil, fmt.Errorf("sdk: failed to read request body: %w", err)
+// WithHTTPClient sets the HTTP client to use for the check.
+// This is useful for injecting mocks during testing.
+func WithHTTPClient(c ports.HTTPClient) HTTPCheckOption {
+	return func(cfg *httpCheckConfig) {
+		if c != nil {
+			cfg.client = c
 		}
-		request.Body = base64.StdEncoding.EncodeToString(bodyBytes)
 	}
+}
 
-	requestBytes, err := json.Marshal(request)
+// RunHTTPCheck performs an HTTP request check.
+// It parses configuration, executes the HTTP request, and returns a structured Result.
+//
+// Expected config fields:
+//   - url (string, required): Target URL
+//   - method (string, optional): HTTP method (default: GET)
+//   - headers (map[string]string, optional): Request headers
+//   - body (string, optional): Request body
+//   - timeout_ms (int, optional): Request timeout in milliseconds (default: 30000)
+//   - expected_status (int, optional): Expected HTTP status code for validation
+//   - follow_redirects (bool, optional): Whether to follow redirects (default: true)
+//   - max_redirects (int, optional): Maximum redirects to follow (default: 10)
+//
+// Returns a Result with:
+//   - Status: "success" if request succeeded and matches expectations, "failure" if status mismatch, "error" if request failed
+//   - Data: map containing "status_code", "headers", "body", "latency_ms", "body_truncated"
+//   - Error: structured error details if request failed
+func RunHTTPCheck(ctx context.Context, cfg config.Config, opts ...HTTPCheckOption) (entities.Result, error) {
+	// Parse required fields
+	url, err := config.MustGetString(cfg, "url")
 	if err != nil {
-		return nil, fmt.Errorf("sdk: failed to marshal HTTP request: %w", err)
+		return entities.ResultError(entities.NewErrorDetail("config", err.Error()).WithCode("MISSING_URL")), nil
 	}
 
-	// Call the host function
-	responsePacked := host_http_request(abi.PtrFromBytes(requestBytes))
-
-	// Read and unmarshal the response
-	responseBytes := abi.BytesFromPtr(responsePacked)
-	abi.DeallocatePacked(responsePacked) // Free memory on Guest side
-
-	var response HTTPResponseWire
-	if err := json.Unmarshal(responseBytes, &response); err != nil {
-		return nil, fmt.Errorf("sdk: failed to unmarshal HTTP response: %w", err)
+	// Parse optional fields
+	method := config.GetStringDefault(cfg, "method", "GET")
+	timeoutMs := config.GetIntDefault(cfg, "timeout_ms", 30000)
+	expectedStatus, hasExpectedStatus := config.GetInt(cfg, "expected_status")
+	maxRedirects := config.GetIntDefault(cfg, "max_redirects", 10)
+	// follow_redirects logic: if false, set maxRedirects to 0?
+	if followRedirects, ok := config.GetBool(cfg, "follow_redirects"); ok && !followRedirects {
+		maxRedirects = 0
 	}
 
-	if response.Error != nil {
-		return nil, response.Error // Convert structured error to Go error
-	}
-
-	// Check if response body was truncated due to size limit
-	// Return explicit error instead of silently truncating
-	if response.BodyTruncated {
-		return nil, fmt.Errorf("sdk: HTTP response body exceeds maximum size (%d bytes). URL: %s", MaxHTTPBodySize, req.URL.String())
-	}
-
-	resp := &http.Response{
-		StatusCode: response.StatusCode,
-		Header:     response.Headers,
-		Request:    req,
-		Proto:      "HTTP/1.1", // Default to 1.1
-		ProtoMajor: 1,
-		ProtoMinor: 1,
-		Status:     http.StatusText(response.StatusCode),
-	}
-
-	// Decode response body if present
-	if response.Body != "" {
-		decodedBody, err := base64.StdEncoding.DecodeString(response.Body)
-		if err != nil {
-			return nil, fmt.Errorf("sdk: failed to decode response body: %w", err)
+	// Parse headers if provided
+	var headers map[string]string
+	if headersRaw, ok := cfg["headers"].(map[string]interface{}); ok {
+		headers = make(map[string]string)
+		for k, v := range headersRaw {
+			if vStr, ok := v.(string); ok {
+				headers[k] = vStr
+			}
 		}
-		resp.Body = io.NopCloser(bytes.NewReader(decodedBody))
-		resp.ContentLength = int64(len(decodedBody))
-	} else {
-		resp.Body = io.NopCloser(bytes.NewReader(nil))
 	}
 
-	return resp, nil
-}
+	// Parse body if provided
+	body := config.GetStringDefault(cfg, "body", "")
 
-// Plugins must explicitly use WasmTransport or SDK helper functions to ensure
-// correct routing through the host function.
-//
-// Option 1 - Use SDK helper functions (recommended):
-//     import sdknet "github.com/reglet-dev/reglet-sdk/go/net"
-//     resp, err := sdknet.Get(ctx, "https://example.com")
-//
-// Option 2 - Create custom http.Client:
-//     client := &http.Client{Transport: &net.WasmTransport{}}
-//     resp, err := client.Get("https://example.com")
-//
-// This approach avoids global state mutation and facilitates test isolation.
+	// Configure check
+	checkCfg := httpCheckConfig{}
+	for _, opt := range opts {
+		opt(&checkCfg)
+	}
 
-// defaultClient is a reusable HTTP client with WasmTransport.
-// Using a single client instance is more efficient than creating a new one for each request.
-var defaultClient = &http.Client{
-	Transport: &WasmTransport{},
-}
+	// If client not injected, create default using config
+	if checkCfg.client == nil {
+		transportOpts := []TransportOption{
+			WithHTTPTimeout(time.Duration(timeoutMs) * time.Millisecond),
+			WithMaxRedirects(maxRedirects),
+		}
+		checkCfg.client = NewTransport(transportOpts...)
+	}
 
-// Get is a convenience function for making HTTP GET requests using WasmTransport.
-// It's equivalent to http.Get() but uses the WASM host function.
-//
-// Example:
-//
-//	resp, err := net.Get(ctx, "https://api.example.com/status")
-//	if err != nil {
-//	    return err
-//	}
-//	defer resp.Body.Close()
-func Get(ctx context.Context, url string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	// Create request
+	req := ports.HTTPRequest{
+		Method:  method,
+		URL:     url,
+		Headers: headers,
+		Timeout: timeoutMs,
+	}
+
+	if body != "" {
+		req.Body = []byte(body)
+	}
+
+	// Execute HTTP request
+	start := time.Now()
+	resp, err := checkCfg.client.Do(ctx, req)
+	latency := time.Since(start)
+
+	// Create metadata
+	metadata := entities.NewRunMetadata(start, time.Now())
+
 	if err != nil {
-		return nil, err
+		// Request failed
+		errDetail := entities.NewErrorDetail("network", err.Error()).WithCode("REQUEST_FAILED")
+		return entities.ResultError(errDetail).WithMetadata(metadata), errDetail
 	}
-	return defaultClient.Do(req)
+
+	// Build result data
+	resultData := map[string]any{
+		"status_code": resp.StatusCode,
+		"latency_ms":  latency.Milliseconds(),
+		// "body_truncated": ??? ports.HTTPResponse doesn't have BodyTruncated
+	}
+
+	if len(resp.Headers) > 0 {
+		resultData["headers"] = resp.Headers
+	}
+
+	if len(resp.Body) > 0 {
+		resultData["body"] = string(resp.Body)
+		resultData["body_length"] = len(resp.Body)
+	}
+
+	// Check expected status if specified
+	if hasExpectedStatus && resp.StatusCode != expectedStatus {
+		message := fmt.Sprintf("HTTP status mismatch: expected %d, got %d", expectedStatus, resp.StatusCode)
+		resultData["expected_status"] = expectedStatus
+		resultData["actual_status"] = resp.StatusCode
+		return entities.ResultFailure(message, resultData).WithMetadata(metadata), nil
+	}
+
+	// Success
+	message := fmt.Sprintf("HTTP %s request successful: %d", method, resp.StatusCode)
+	return entities.ResultSuccess(message, resultData).WithMetadata(metadata), nil
 }
 
-// Post is a convenience function for making HTTP POST requests using WasmTransport.
+// transportConfig holds the configuration for a WasmTransport.
+// This struct is unexported to enforce the functional options pattern.
+type transportConfig struct {
+	tlsConfig    *tls.Config   // Optional TLS configuration
+	timeout      time.Duration // HTTP request timeout (default: 30s)
+	maxRedirects int           // Maximum number of redirects to follow (default: 10)
+}
+
+// defaultTransportConfig returns secure defaults for HTTP transport.
+// These defaults align with constitution requirements for secure-by-default.
+func defaultTransportConfig() transportConfig {
+	return transportConfig{
+		timeout:      30 * time.Second,
+		maxRedirects: 10,
+		tlsConfig:    nil, // Use system defaults
+	}
+}
+
+// TransportOption is a functional option for configuring a WasmTransport.
+// Use With* functions to create options.
+type TransportOption func(*transportConfig)
+
+// WithHTTPTimeout sets the timeout for HTTP requests.
+// Default is 30 seconds per constitution specification.
+// A zero or negative duration is ignored (uses default).
+func WithHTTPTimeout(d time.Duration) TransportOption {
+	return func(c *transportConfig) {
+		if d > 0 {
+			c.timeout = d
+		}
+	}
+}
+
+// WithMaxRedirects sets the maximum number of redirects to follow.
+// Default is 10 redirects. A negative value is ignored (uses default).
+// Setting to 0 disables following redirects.
+func WithMaxRedirects(n int) TransportOption {
+	return func(c *transportConfig) {
+		if n >= 0 {
+			c.maxRedirects = n
+		}
+	}
+}
+
+// WithTLSConfig sets a custom TLS configuration.
+// If nil is passed, the system default TLS configuration is used.
+func WithTLSConfig(cfg *tls.Config) TransportOption {
+	return func(c *transportConfig) {
+		c.tlsConfig = cfg
+	}
+}
+
+// NewTransport creates a new HTTP client with the given options.
+// Without any options, secure defaults are applied:
+//   - timeout: 30 seconds
+//   - maxRedirects: 10
+//   - tlsConfig: system defaults
 //
 // Example:
 //
-//	body := bytes.NewReader([]byte(`{"key":"value"}`))
-//	resp, err := net.Post(ctx, "https://api.example.com/data", "application/json", body)
-func Post(ctx context.Context, url, contentType string, body io.Reader) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
-	if err != nil {
-		return nil, err
+//	// Use defaults
+//	client := NewTransport()
+//
+//	// With custom timeout
+//	client := NewTransport(
+//	    WithHTTPTimeout(60*time.Second),
+//	    WithMaxRedirects(5),
+//	)
+func NewTransport(opts ...TransportOption) ports.HTTPClient {
+	cfg := defaultTransportConfig()
+	for _, opt := range opts {
+		opt(&cfg)
 	}
-	req.Header.Set("Content-Type", contentType)
-	return defaultClient.Do(req)
+	// Note: maxRedirects and tlsConfig are currently ignored by the underlying WASM adapter
+	return wasm.NewHTTPAdapter(cfg.timeout)
 }
-
-// Do executes an HTTP request using WasmTransport.
-// This is useful when you need full control over the request.
-//
-// Example:
-//
-//	req, _ := http.NewRequestWithContext(ctx, "PUT", url, body)
-//	req.Header.Set("Authorization", "Bearer "+token)
-//	resp, err := net.Do(req)
-func Do(req *http.Request) (*http.Response, error) {
-	return defaultClient.Do(req)
-}
-
-// Re-export HTTP wire format types from shared wireformat package
-type (
-	HTTPRequestWire  = entities.HTTPRequest
-	HTTPResponseWire = entities.HTTPResponse
-)

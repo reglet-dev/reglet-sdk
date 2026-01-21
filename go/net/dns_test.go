@@ -1,290 +1,156 @@
-//go:build !wasip1
-
 package sdknet
 
 import (
-	"encoding/json"
+	"context"
+	"errors"
 	"testing"
 
-	"github.com/reglet-dev/reglet-sdk/go/domain/entities"
+	"github.com/reglet-dev/reglet-sdk/go/application/config"
+	"github.com/reglet-dev/reglet-sdk/go/domain/ports"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
-// Note: Actual DNS lookups require WASM runtime with host functions.
-// These tests focus on data structures and wire format serialization.
-// The WasmResolver type is only available in WASM builds (wasip1 tag).
-
-func TestDNSRequestWire_Serialization(t *testing.T) {
-	tests := []struct {
-		name       string
-		request    DNSRequestWire
-		wantFields map[string]interface{}
-	}{
-		{
-			name: "A record query",
-			request: DNSRequestWire{
-				Hostname: "example.com",
-				Type:     "A",
-			},
-			wantFields: map[string]interface{}{
-				"hostname": "example.com",
-				"type":     "A",
-			},
-		},
-		{
-			name: "AAAA record query",
-			request: DNSRequestWire{
-				Hostname: "example.com",
-				Type:     "AAAA",
-			},
-			wantFields: map[string]interface{}{
-				"hostname": "example.com",
-				"type":     "AAAA",
-			},
-		},
-		{
-			name: "MX record query",
-			request: DNSRequestWire{
-				Hostname: "example.com",
-				Type:     "MX",
-			},
-			wantFields: map[string]interface{}{
-				"hostname": "example.com",
-				"type":     "MX",
-			},
-		},
-		{
-			name: "query with custom nameserver",
-			request: DNSRequestWire{
-				Hostname:   "example.com",
-				Type:       "A",
-				Nameserver: "8.8.8.8:53",
-			},
-			wantFields: map[string]interface{}{
-				"hostname":   "example.com",
-				"type":       "A",
-				"nameserver": "8.8.8.8:53",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Test JSON marshaling
-			data, err := json.Marshal(tt.request)
-			require.NoError(t, err)
-
-			// Test JSON unmarshaling
-			var decoded DNSRequestWire
-			err = json.Unmarshal(data, &decoded)
-			require.NoError(t, err)
-
-			// Verify fields
-			assert.Equal(t, tt.request.Hostname, decoded.Hostname)
-			assert.Equal(t, tt.request.Type, decoded.Type)
-			assert.Equal(t, tt.request.Nameserver, decoded.Nameserver)
-		})
-	}
+// MockDNSResolver
+type MockDNSResolver struct {
+	mock.Mock
 }
 
-func TestDNSResponseWire_Serialization(t *testing.T) {
-	tests := []struct {
-		name     string
-		response DNSResponseWire
-	}{
-		{
-			name: "successful A record response",
-			response: DNSResponseWire{
-				Records: []string{"93.184.216.34"},
-			},
-		},
-		{
-			name: "multiple A records",
-			response: DNSResponseWire{
-				Records: []string{"93.184.216.34", "93.184.216.35"},
-			},
-		},
-		{
-			name: "MX records",
-			response: DNSResponseWire{
-				Records: []string{
-					"10 mail1.example.com",
-					"20 mail2.example.com",
-				},
-			},
-		},
-		{
-			name: "TXT records",
-			response: DNSResponseWire{
-				Records: []string{
-					"v=spf1 include:_spf.example.com ~all",
-				},
-			},
-		},
-		{
-			name: "error response",
-			response: DNSResponseWire{
-				Error: &entities.ErrorDetail{
-					Message: "DNS query failed",
-					Type:    "network",
-					Code:    "NXDOMAIN",
-				},
-			},
-		},
+func (m *MockDNSResolver) LookupHost(ctx context.Context, host string) ([]string, error) {
+	args := m.Called(ctx, host)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Test JSON marshaling
-			data, err := json.Marshal(tt.response)
-			require.NoError(t, err)
-
-			// Test JSON unmarshaling
-			var decoded DNSResponseWire
-			err = json.Unmarshal(data, &decoded)
-			require.NoError(t, err)
-
-			// Verify records
-			assert.Equal(t, tt.response.Records, decoded.Records)
-
-			// Verify error if present
-			if tt.response.Error != nil {
-				require.NotNil(t, decoded.Error)
-				assert.Equal(t, tt.response.Error.Message, decoded.Error.Message)
-				assert.Equal(t, tt.response.Error.Type, decoded.Error.Type)
-				assert.Equal(t, tt.response.Error.Code, decoded.Error.Code)
-			} else {
-				assert.Nil(t, decoded.Error)
-			}
-		})
-	}
+	return args.Get(0).([]string), args.Error(1)
 }
 
-func TestDNSRecordTypes(t *testing.T) {
-	// Test that all common DNS record types can be represented
-	recordTypes := []string{
-		"A",
-		"AAAA",
-		"CNAME",
-		"MX",
-		"NS",
-		"TXT",
-		"SOA",
-		"PTR",
-		"SRV",
-	}
-
-	for _, recordType := range recordTypes {
-		t.Run(recordType, func(t *testing.T) {
-			req := DNSRequestWire{
-				Hostname: "example.com",
-				Type:     recordType,
-			}
-
-			data, err := json.Marshal(req)
-			require.NoError(t, err)
-
-			var decoded DNSRequestWire
-			err = json.Unmarshal(data, &decoded)
-			require.NoError(t, err)
-			assert.Equal(t, recordType, decoded.Type)
-		})
-	}
+func (m *MockDNSResolver) LookupCNAME(ctx context.Context, host string) (string, error) {
+	args := m.Called(ctx, host)
+	return args.String(0), args.Error(1)
 }
 
-func TestDNSWireFormat_EmptyRecords(t *testing.T) {
-	// Test that empty record responses are handled correctly
-	response := DNSResponseWire{
-		Records: []string{},
+func (m *MockDNSResolver) LookupMX(ctx context.Context, domain string) ([]ports.MXRecord, error) {
+	args := m.Called(ctx, domain)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
 	}
-
-	data, err := json.Marshal(response)
-	require.NoError(t, err)
-
-	var decoded DNSResponseWire
-	err = json.Unmarshal(data, &decoded)
-	require.NoError(t, err)
-
-	// JSON unmarshaling of empty/omitted array fields results in nil slice (Go behavior)
-	// This is acceptable - both nil and empty slice represent "no records"
-	assert.Len(t, decoded.Records, 0)
+	return args.Get(0).([]ports.MXRecord), args.Error(1)
 }
 
-func TestDNSWireFormat_ErrorHandling(t *testing.T) {
+func (m *MockDNSResolver) LookupTXT(ctx context.Context, domain string) ([]string, error) {
+	args := m.Called(ctx, domain)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]string), args.Error(1)
+}
+
+func (m *MockDNSResolver) LookupNS(ctx context.Context, domain string) ([]string, error) {
+	args := m.Called(ctx, domain)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]string), args.Error(1)
+}
+
+func TestRunDNSCheck_Validation(t *testing.T) {
 	tests := []struct {
 		name      string
-		errorType string
-		errorCode string
-		message   string
+		cfg       config.Config
+		errCode   string
+		errDetail string
 	}{
 		{
-			name:      "NXDOMAIN",
-			errorType: "network",
-			errorCode: "NXDOMAIN",
-			message:   "domain does not exist",
-		},
-		{
-			name:      "timeout",
-			errorType: "timeout",
-			errorCode: "ETIMEDOUT",
-			message:   "DNS query timed out",
-		},
-		{
-			name:      "server failure",
-			errorType: "network",
-			errorCode: "SERVFAIL",
-			message:   "DNS server returned SERVFAIL",
-		},
-		{
-			name:      "refused",
-			errorType: "network",
-			errorCode: "REFUSED",
-			message:   "DNS server refused query",
+			name:    "Missing Hostname",
+			cfg:     config.Config{},
+			errCode: "MISSING_HOSTNAME",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			response := DNSResponseWire{
-				Error: &entities.ErrorDetail{
-					Type:    tt.errorType,
-					Code:    tt.errorCode,
-					Message: tt.message,
-				},
-			}
-
-			data, err := json.Marshal(response)
+			result, err := RunDNSCheck(context.Background(), tt.cfg)
 			require.NoError(t, err)
-
-			var decoded DNSResponseWire
-			err = json.Unmarshal(data, &decoded)
-			require.NoError(t, err)
-
-			require.NotNil(t, decoded.Error)
-			assert.Equal(t, tt.errorType, decoded.Error.Type)
-			assert.Equal(t, tt.errorCode, decoded.Error.Code)
-			assert.Equal(t, tt.message, decoded.Error.Message)
+			assert.True(t, result.IsError())
+			assert.Equal(t, tt.errCode, result.Error.Code)
 		})
 	}
 }
 
-// Integration test notes for WASM environment (requires wasip1 build):
-// The following tests would be added in a separate dns_integration_test.go file:
-//
-// - TestWasmResolver_LookupHost: Test with known domains (example.com)
-// - TestWasmResolver_LookupMX: Test with known mail servers
-// - TestWasmResolver_LookupTXT: Test SPF/DKIM records
-// - TestWasmResolver_Timeout: Test timeout behavior with slow DNS servers
-// - TestWasmResolver_NXDOMAIN: Test error handling for non-existent domains
-// - TestWasmResolver_Cancellation: Test cancellation via context
-// - TestWasmResolver_CustomNameserver: Test custom nameserver configuration
-//
-// WasmResolver methods (verified to exist in dns.go):
-// - LookupHost(ctx, host) ([]string, error)
-// - LookupMX(ctx, host) ([]*MXRecord, error)
-// - LookupTXT(ctx, host) ([]string, error)
-// - LookupNS(ctx, host) ([]string, error)
-// - LookupA(ctx, host) ([]string, error)
-// - LookupAAAA(ctx, host) ([]string, error)
-// - LookupIPAddr(ctx, host) ([]net.IPAddr, error)
+func TestRunDNSCheck_Mock_A_Record(t *testing.T) {
+	mockResolver := new(MockDNSResolver)
+
+	// Mock LookupHost returning IPs
+	mockResolver.On("LookupHost", mock.Anything, "example.com").Return([]string{"1.2.3.4", "2001:db8::1"}, nil)
+
+	cfg := config.Config{
+		"hostname":    "example.com",
+		"record_type": "A",
+	}
+
+	result, err := RunDNSCheck(context.Background(), cfg, WithDNSResolver(mockResolver))
+
+	require.NoError(t, err)
+	assert.True(t, result.IsSuccess())
+	assert.NotNil(t, result.Data["records"])
+	records := result.Data["records"].([]string)
+	// Should be filtered to only IPv4
+	assert.Len(t, records, 1)
+	assert.Equal(t, "1.2.3.4", records[0])
+
+	mockResolver.AssertExpectations(t)
+}
+
+func TestRunDNSCheck_Mock_MX_Record(t *testing.T) {
+	mockResolver := new(MockDNSResolver)
+
+	mxRecords := []ports.MXRecord{
+		{Host: "mail.example.com", Pref: 10},
+	}
+	mockResolver.On("LookupMX", mock.Anything, "example.com").Return(mxRecords, nil)
+
+	cfg := config.Config{
+		"hostname":    "example.com",
+		"record_type": "MX",
+	}
+
+	result, err := RunDNSCheck(context.Background(), cfg, WithDNSResolver(mockResolver))
+
+	require.NoError(t, err)
+	assert.True(t, result.IsSuccess())
+	assert.NotNil(t, result.Data["mx_records"])
+	mxData := result.Data["mx_records"].([]map[string]any)
+	assert.Len(t, mxData, 1)
+	assert.Equal(t, "mail.example.com", mxData[0]["host"])
+	// Check type of pref, json unmarshal usually makes numbers float64, but here it's uint16 in struct
+	// Converted to any in map.
+	assert.Equal(t, uint16(10), mxData[0]["pref"])
+
+	mockResolver.AssertExpectations(t)
+}
+
+func TestRunDNSCheck_Mock_LookupFailed(t *testing.T) {
+	mockResolver := new(MockDNSResolver)
+
+	mockResolver.On("LookupHost", mock.Anything, "example.com").Return(nil, errors.New("no such host"))
+
+	cfg := config.Config{
+		"hostname":    "example.com",
+		"record_type": "A",
+	}
+
+	result, err := RunDNSCheck(context.Background(), cfg, WithDNSResolver(mockResolver))
+
+	require.NoError(t, err)
+	assert.True(t, result.IsError())
+	assert.Equal(t, "LOOKUP_FAILED", result.Error.Code)
+	mockResolver.AssertExpectations(t)
+}
+
+func TestRunDNSCheck_DefaultResolver_PanicsOnNative(t *testing.T) {
+	cfg := config.Config{"hostname": "example.com"}
+	assert.PanicsWithValue(t, "WASM DNS adapter not available in native build", func() {
+		_, _ = RunDNSCheck(context.Background(), cfg)
+	})
+}

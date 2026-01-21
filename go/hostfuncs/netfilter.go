@@ -138,7 +138,8 @@ func ValidateAddress(address string, opts ...NetfilterOption) NetfilterResult {
 	}
 
 	// Check explicit allowlist/blocklist
-	if result := checkHostLists(host, cfg); result.Reason != "" {
+	result := checkHostLists(host, cfg)
+	if result.Allowed || result.Reason != "" {
 		return result
 	}
 

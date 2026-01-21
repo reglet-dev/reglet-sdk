@@ -42,3 +42,4 @@ bin/
 .specify/
 specs/
 reglet/
+.gemini/

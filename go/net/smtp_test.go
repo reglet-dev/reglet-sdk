@@ -1,262 +1,125 @@
-//go:build !wasip1
-
 package sdknet
 
 import (
-	"encoding/json"
+	"context"
+	"errors"
 	"testing"
+	"time"
 
-	"github.com/reglet-dev/reglet-sdk/go/domain/entities"
+	"github.com/reglet-dev/reglet-sdk/go/application/config"
+	"github.com/reglet-dev/reglet-sdk/go/domain/ports"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
-// Note: Actual SMTP connections require WASM runtime with host functions.
-// These tests focus on wire format structures and data serialization.
+// MockSMTPClient
+type MockSMTPClient struct {
+	mock.Mock
+}
 
-func TestSMTPRequestWire_Serialization(t *testing.T) {
+func (m *MockSMTPClient) Connect(ctx context.Context, host, port string, timeout time.Duration, useTLS, useStartTLS bool) (*ports.SMTPConnectResult, error) {
+	args := m.Called(ctx, host, port, timeout, useTLS, useStartTLS)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ports.SMTPConnectResult), args.Error(1)
+}
+
+func TestRunSMTPCheck_Validation(t *testing.T) {
 	tests := []struct {
-		name    string
-		request SMTPRequestWire
+		name      string
+		cfg       config.Config
+		errCode   string
+		errDetail string
 	}{
 		{
-			name: "basic SMTP connection",
-			request: SMTPRequestWire{
-				Host: "smtp.example.com",
-				Port: "25",
-			},
+			name:    "Missing Host",
+			cfg:     config.Config{"port": 25},
+			errCode: "MISSING_HOST",
 		},
 		{
-			name: "SMTPS connection (TLS)",
-			request: SMTPRequestWire{
-				Host: "smtp.example.com",
-				Port: "465",
-				TLS:  true,
-			},
+			name:    "Missing Port",
+			cfg:     config.Config{"host": "smtp.example.com"},
+			errCode: "MISSING_PORT",
 		},
 		{
-			name: "SMTP with STARTTLS",
-			request: SMTPRequestWire{
-				Host:     "smtp.example.com",
-				Port:     "587",
-				StartTLS: true,
-			},
+			name:    "Invalid Port Low",
+			cfg:     config.Config{"host": "smtp.example.com", "port": 0},
+			errCode: "INVALID_PORT",
 		},
 		{
-			name: "connection with timeout",
-			request: SMTPRequestWire{
-				Host:      "smtp.example.com",
-				Port:      "25",
-				TimeoutMs: 10000,
-			},
-		},
-		{
-			name: "custom port with TLS and STARTTLS",
-			request: SMTPRequestWire{
-				Host:     "smtp.example.com",
-				Port:     "2525",
-				TLS:      false,
-				StartTLS: true,
-			},
+			name:    "Invalid Port High",
+			cfg:     config.Config{"host": "smtp.example.com", "port": 65536},
+			errCode: "INVALID_PORT",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			data, err := json.Marshal(tt.request)
+			result, err := RunSMTPCheck(context.Background(), tt.cfg)
 			require.NoError(t, err)
-
-			var decoded SMTPRequestWire
-			err = json.Unmarshal(data, &decoded)
-			require.NoError(t, err)
-
-			assert.Equal(t, tt.request.Host, decoded.Host)
-			assert.Equal(t, tt.request.Port, decoded.Port)
-			assert.Equal(t, tt.request.TLS, decoded.TLS)
-			assert.Equal(t, tt.request.StartTLS, decoded.StartTLS)
-			assert.Equal(t, tt.request.TimeoutMs, decoded.TimeoutMs)
+			assert.True(t, result.IsError())
+			assert.Equal(t, tt.errCode, result.Error.Code)
 		})
 	}
 }
 
-func TestSMTPResponseWire_Serialization(t *testing.T) {
-	tests := []struct {
-		name     string
-		response SMTPResponseWire
-	}{
-		{
-			name: "successful connection",
-			response: SMTPResponseWire{
-				Connected: true,
-				Address:   "smtp.example.com:25",
-				Banner:    "220 smtp.example.com ESMTP",
-			},
-		},
-		{
-			name: "failed connection",
-			response: SMTPResponseWire{
-				Connected: false,
-				Address:   "unreachable.example.com:25",
-				Error: &entities.ErrorDetail{
-					Message: "connection refused",
-					Type:    "network",
-					Code:    "ECONNREFUSED",
-				},
-			},
-		},
-		{
-			name: "TLS connection success",
-			response: SMTPResponseWire{
-				Connected:      true,
-				Address:        "smtp.example.com:465",
-				Banner:         "220 smtp.example.com ESMTP ready",
-				TLS:            true,
-				TLSVersion:     "TLS 1.3",
-				TLSCipherSuite: "TLS_AES_128_GCM_SHA256",
-				TLSServerName:  "smtp.example.com",
-			},
-		},
-		{
-			name: "timeout error",
-			response: SMTPResponseWire{
-				Connected: false,
-				Address:   "slow.example.com:25",
-				Error: &entities.ErrorDetail{
-					Message: "connection timeout",
-					Type:    "timeout",
-					Code:    "ETIMEDOUT",
-				},
-			},
-		},
-		{
-			name: "STARTTLS upgrade success",
-			response: SMTPResponseWire{
-				Connected:      true,
-				Address:        "smtp.example.com:587",
-				Banner:         "220 smtp.example.com ESMTP",
-				TLS:            true,
-				TLSVersion:     "TLS 1.2",
-				TLSCipherSuite: "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
-			},
-		},
+func TestRunSMTPCheck_WithMockClient_Success(t *testing.T) {
+	mockClient := new(MockSMTPClient)
+
+	expectedResult := &ports.SMTPConnectResult{
+		Connected:    true,
+		Banner:       "220 smtp.example.com ESMTP",
+		TLSEnabled:   true,
+		TLSVersion:   "TLS 1.3",
+		ResponseTime: 50 * time.Millisecond,
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			data, err := json.Marshal(tt.response)
-			require.NoError(t, err)
+	mockClient.On("Connect", mock.Anything, "smtp.example.com", "587", 30*time.Second, false, true).Return(expectedResult, nil)
 
-			var decoded SMTPResponseWire
-			err = json.Unmarshal(data, &decoded)
-			require.NoError(t, err)
-
-			assert.Equal(t, tt.response.Connected, decoded.Connected)
-			assert.Equal(t, tt.response.Address, decoded.Address)
-			assert.Equal(t, tt.response.Banner, decoded.Banner)
-			assert.Equal(t, tt.response.TLS, decoded.TLS)
-			assert.Equal(t, tt.response.TLSVersion, decoded.TLSVersion)
-
-			if tt.response.Error != nil {
-				require.NotNil(t, decoded.Error)
-				assert.Equal(t, tt.response.Error.Message, decoded.Error.Message)
-				assert.Equal(t, tt.response.Error.Type, decoded.Error.Type)
-			}
-		})
+	cfg := config.Config{
+		"host":         "smtp.example.com",
+		"port":         587,
+		"use_starttls": true,
+		"timeout_ms":   30000,
 	}
+
+	result, err := RunSMTPCheck(context.Background(), cfg, WithSMTPClient(mockClient))
+
+	require.NoError(t, err)
+	assert.True(t, result.IsSuccess())
+	assert.Equal(t, true, result.Data["connected"])
+	assert.Equal(t, "220 smtp.example.com ESMTP", result.Data["banner"])
+	assert.Equal(t, "TLS 1.3", result.Data["tls_version"])
+	assert.Greater(t, result.Data["latency_ms"], int64(-1))
+
+	mockClient.AssertExpectations(t)
 }
 
-func TestSMTPCommonPorts(t *testing.T) {
-	ports := map[string]string{
-		"SMTP":            "25",
-		"SMTPS":           "465",
-		"Submission":      "587",
-		"AlternativeSMTP": "2525",
-	}
-
-	for service, port := range ports {
-		t.Run(service, func(t *testing.T) {
-			req := SMTPRequestWire{
-				Host: "smtp.example.com",
-				Port: port,
-			}
-
-			data, err := json.Marshal(req)
-			require.NoError(t, err)
-
-			var decoded SMTPRequestWire
-			err = json.Unmarshal(data, &decoded)
-			require.NoError(t, err)
-			assert.Equal(t, port, decoded.Port)
-		})
-	}
+func TestRunSMTPCheck_DefaultClient_PanicsOnNative(t *testing.T) {
+	cfg := config.Config{"host": "smtp.example.com", "port": 25}
+	assert.PanicsWithValue(t, "WASM SMTP adapter not available in native build. Use WithSMTPClient() to inject a mock.", func() {
+		_, _ = RunSMTPCheck(context.Background(), cfg)
+	})
 }
 
-func TestSMTPErrorTypes(t *testing.T) {
-	errors := []struct {
-		code    string
-		errType string
-		message string
-	}{
-		{"ECONNREFUSED", "network", "connection refused"},
-		{"ETIMEDOUT", "timeout", "connection timeout"},
-		{"EHOSTUNREACH", "network", "host unreachable"},
-		{"ENETUNREACH", "network", "network unreachable"},
-		{"TLS_ERROR", "tls", "TLS handshake failed"},
-		{"STARTTLS_ERROR", "tls", "STARTTLS upgrade failed"},
+func TestRunSMTPCheck_WithMockClient_ConnectionFailed(t *testing.T) {
+	mockClient := new(MockSMTPClient)
+
+	mockClient.On("Connect", mock.Anything, "smtp.example.com", "25", 30*time.Second, false, false).Return(nil, errors.New("timeout"))
+
+	cfg := config.Config{
+		"host": "smtp.example.com",
+		"port": 25,
 	}
 
-	for _, e := range errors {
-		t.Run(e.code, func(t *testing.T) {
-			resp := SMTPResponseWire{
-				Connected: false,
-				Error: &entities.ErrorDetail{
-					Code:    e.code,
-					Type:    e.errType,
-					Message: e.message,
-				},
-			}
+	result, err := RunSMTPCheck(context.Background(), cfg, WithSMTPClient(mockClient))
 
-			data, err := json.Marshal(resp)
-			require.NoError(t, err)
+	require.Error(t, err)
+	assert.True(t, result.IsError())
+	assert.Equal(t, "CONNECTION_FAILED", result.Error.Code)
+	assert.Contains(t, result.Error.Message, "timeout")
 
-			var decoded SMTPResponseWire
-			err = json.Unmarshal(data, &decoded)
-			require.NoError(t, err)
-
-			require.NotNil(t, decoded.Error)
-			assert.Equal(t, e.code, decoded.Error.Code)
-			assert.Equal(t, e.errType, decoded.Error.Type)
-		})
-	}
-}
-
-func TestSMTPBannerParsing(t *testing.T) {
-	banners := []struct {
-		name   string
-		banner string
-	}{
-		{"standard banner", "220 smtp.example.com ESMTP Postfix"},
-		{"Microsoft Exchange", "220 mail.example.com Microsoft ESMTP MAIL Service ready"},
-		{"Google Mail", "220 smtp.gmail.com ESMTP"},
-		{"Amazon SES", "220 email-smtp.us-east-1.amazonaws.com ESMTP"},
-		{"minimal banner", "220 ESMTP"},
-	}
-
-	for _, tt := range banners {
-		t.Run(tt.name, func(t *testing.T) {
-			resp := SMTPResponseWire{
-				Connected: true,
-				Banner:    tt.banner,
-			}
-
-			data, err := json.Marshal(resp)
-			require.NoError(t, err)
-
-			var decoded SMTPResponseWire
-			err = json.Unmarshal(data, &decoded)
-			require.NoError(t, err)
-
-			assert.Equal(t, tt.banner, decoded.Banner)
-		})
-	}
+	mockClient.AssertExpectations(t)
 }
