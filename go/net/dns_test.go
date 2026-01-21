@@ -1,12 +1,12 @@
 //go:build !wasip1
 
-package net
+package sdknet
 
 import (
 	"encoding/json"
 	"testing"
 
-	"github.com/reglet-dev/reglet-sdk/go/wireformat"
+	"github.com/reglet-dev/reglet-sdk/go/domain/entities"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -125,7 +125,7 @@ func TestDNSResponseWire_Serialization(t *testing.T) {
 		{
 			name: "error response",
 			response: DNSResponseWire{
-				Error: &wireformat.ErrorDetail{
+				Error: &entities.ErrorDetail{
 					Message: "DNS query failed",
 					Type:    "network",
 					Code:    "NXDOMAIN",
@@ -247,7 +247,7 @@ func TestDNSWireFormat_ErrorHandling(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			response := DNSResponseWire{
-				Error: &wireformat.ErrorDetail{
+				Error: &entities.ErrorDetail{
 					Type:    tt.errorType,
 					Code:    tt.errorCode,
 					Message: tt.message,

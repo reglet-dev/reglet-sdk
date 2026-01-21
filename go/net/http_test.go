@@ -1,12 +1,12 @@
 //go:build !wasip1
 
-package net
+package sdknet
 
 import (
 	"encoding/json"
 	"testing"
 
-	"github.com/reglet-dev/reglet-sdk/go/wireformat"
+	"github.com/reglet-dev/reglet-sdk/go/domain/entities"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -17,18 +17,18 @@ import (
 func TestHTTPRequestWire_Serialization(t *testing.T) {
 	tests := []struct {
 		name    string
-		request wireformat.HTTPRequestWire
+		request entities.HTTPRequest
 	}{
 		{
 			name: "GET request",
-			request: wireformat.HTTPRequestWire{
+			request: entities.HTTPRequest{
 				Method: "GET",
 				URL:    "https://api.example.com/status",
 			},
 		},
 		{
 			name: "POST with body",
-			request: wireformat.HTTPRequestWire{
+			request: entities.HTTPRequest{
 				Method: "POST",
 				URL:    "https://api.example.com/data",
 				Body:   `{"key":"value"}`,
@@ -36,7 +36,7 @@ func TestHTTPRequestWire_Serialization(t *testing.T) {
 		},
 		{
 			name: "request with headers",
-			request: wireformat.HTTPRequestWire{
+			request: entities.HTTPRequest{
 				Method: "GET",
 				URL:    "https://api.example.com/data",
 				Headers: map[string][]string{
@@ -52,7 +52,7 @@ func TestHTTPRequestWire_Serialization(t *testing.T) {
 			data, err := json.Marshal(tt.request)
 			require.NoError(t, err)
 
-			var decoded wireformat.HTTPRequestWire
+			var decoded entities.HTTPRequest
 			err = json.Unmarshal(data, &decoded)
 			require.NoError(t, err)
 
@@ -67,11 +67,11 @@ func TestHTTPRequestWire_Serialization(t *testing.T) {
 func TestHTTPResponseWire_Serialization(t *testing.T) {
 	tests := []struct {
 		name     string
-		response wireformat.HTTPResponseWire
+		response entities.HTTPResponse
 	}{
 		{
 			name: "successful response",
-			response: wireformat.HTTPResponseWire{
+			response: entities.HTTPResponse{
 				StatusCode: 200,
 				Body:       `{"status":"ok"}`,
 				Headers: map[string][]string{
@@ -81,16 +81,16 @@ func TestHTTPResponseWire_Serialization(t *testing.T) {
 		},
 		{
 			name: "error response",
-			response: wireformat.HTTPResponseWire{
+			response: entities.HTTPResponse{
 				StatusCode: 404,
 				Body:       `{"error":"not found"}`,
 			},
 		},
 		{
 			name: "response with error detail",
-			response: wireformat.HTTPResponseWire{
+			response: entities.HTTPResponse{
 				StatusCode: 500,
-				Error: &wireformat.ErrorDetail{
+				Error: &entities.ErrorDetail{
 					Message: "Internal server error",
 					Type:    "network",
 					Code:    "500",
@@ -104,7 +104,7 @@ func TestHTTPResponseWire_Serialization(t *testing.T) {
 			data, err := json.Marshal(tt.response)
 			require.NoError(t, err)
 
-			var decoded wireformat.HTTPResponseWire
+			var decoded entities.HTTPResponse
 			err = json.Unmarshal(data, &decoded)
 			require.NoError(t, err)
 
@@ -125,7 +125,7 @@ func TestHTTPMethods(t *testing.T) {
 
 	for _, method := range methods {
 		t.Run(method, func(t *testing.T) {
-			req := wireformat.HTTPRequestWire{
+			req := entities.HTTPRequest{
 				Method: method,
 				URL:    "https://api.example.com/resource",
 			}
@@ -133,7 +133,7 @@ func TestHTTPMethods(t *testing.T) {
 			data, err := json.Marshal(req)
 			require.NoError(t, err)
 
-			var decoded wireformat.HTTPRequestWire
+			var decoded entities.HTTPRequest
 			err = json.Unmarshal(data, &decoded)
 			require.NoError(t, err)
 			assert.Equal(t, method, decoded.Method)
@@ -146,7 +146,7 @@ func TestHTTPStatusCodes(t *testing.T) {
 
 	for _, code := range codes {
 		t.Run(string(rune(code)), func(t *testing.T) {
-			resp := wireformat.HTTPResponseWire{
+			resp := entities.HTTPResponse{
 				StatusCode: code,
 				Body:       "response body",
 			}
@@ -154,7 +154,7 @@ func TestHTTPStatusCodes(t *testing.T) {
 			data, err := json.Marshal(resp)
 			require.NoError(t, err)
 
-			var decoded wireformat.HTTPResponseWire
+			var decoded entities.HTTPResponse
 			err = json.Unmarshal(data, &decoded)
 			require.NoError(t, err)
 			assert.Equal(t, code, decoded.StatusCode)
@@ -167,7 +167,7 @@ func TestHTTPBodySizeLimits(t *testing.T) {
 	// Note: Actual truncation happens in http.go with 10MB limit
 	// This test documents expected behavior with BodyTruncated flag
 
-	resp := wireformat.HTTPResponseWire{
+	resp := entities.HTTPResponse{
 		StatusCode:    200,
 		Body:          "large response body",
 		BodyTruncated: true,
@@ -176,7 +176,7 @@ func TestHTTPBodySizeLimits(t *testing.T) {
 	data, err := json.Marshal(resp)
 	require.NoError(t, err)
 
-	var decoded wireformat.HTTPResponseWire
+	var decoded entities.HTTPResponse
 	err = json.Unmarshal(data, &decoded)
 	require.NoError(t, err)
 	assert.True(t, decoded.BodyTruncated)

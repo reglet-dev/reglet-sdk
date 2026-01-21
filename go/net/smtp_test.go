@@ -1,12 +1,12 @@
 //go:build !wasip1
 
-package net
+package sdknet
 
 import (
 	"encoding/json"
 	"testing"
 
-	"github.com/reglet-dev/reglet-sdk/go/wireformat"
+	"github.com/reglet-dev/reglet-sdk/go/domain/entities"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -97,7 +97,7 @@ func TestSMTPResponseWire_Serialization(t *testing.T) {
 			response: SMTPResponseWire{
 				Connected: false,
 				Address:   "unreachable.example.com:25",
-				Error: &wireformat.ErrorDetail{
+				Error: &entities.ErrorDetail{
 					Message: "connection refused",
 					Type:    "network",
 					Code:    "ECONNREFUSED",
@@ -121,7 +121,7 @@ func TestSMTPResponseWire_Serialization(t *testing.T) {
 			response: SMTPResponseWire{
 				Connected: false,
 				Address:   "slow.example.com:25",
-				Error: &wireformat.ErrorDetail{
+				Error: &entities.ErrorDetail{
 					Message: "connection timeout",
 					Type:    "timeout",
 					Code:    "ETIMEDOUT",
@@ -209,7 +209,7 @@ func TestSMTPErrorTypes(t *testing.T) {
 		t.Run(e.code, func(t *testing.T) {
 			resp := SMTPResponseWire{
 				Connected: false,
-				Error: &wireformat.ErrorDetail{
+				Error: &entities.ErrorDetail{
 					Code:    e.code,
 					Type:    e.errType,
 					Message: e.message,

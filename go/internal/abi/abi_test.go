@@ -5,161 +5,234 @@ package abi
 import (
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
+// resetMemoryManager clears all tracked allocations for test isolation.
+func resetMemoryManager() {
+	FreeAllTracked()
+}
+
 func TestPackPtrLen(t *testing.T) {
-	ptr := uint32(0x12345678)
-	length := uint32(0xABCDEF00)
-	packed := PackPtrLen(ptr, length)
-
-	expected := (uint64(ptr) << 32) | uint64(length)
-	if packed != expected {
-		t.Errorf("PackPtrLen(%x, %x) = %x; want %x", ptr, length, packed, expected)
+	tests := []struct {
+		name   string
+		ptr    uint32
+		length uint32
+		want   uint64
+	}{
+		{
+			name:   "typical values",
+			ptr:    0x12345678,
+			length: 0xABCDEF00,
+			want:   (uint64(0x12345678) << PtrHighBits) | uint64(0xABCDEF00),
+		},
+		{
+			name:   "zero pointer zero length",
+			ptr:    0,
+			length: 0,
+			want:   0,
+		},
+		{
+			name:   "max pointer",
+			ptr:    0xFFFFFFFF,
+			length: 1,
+			want:   (uint64(0xFFFFFFFF) << PtrHighBits) | 1,
+		},
 	}
 
-	p, l := UnpackPtrLen(packed)
-	if p != ptr {
-		t.Errorf("UnpackPtrLen returned ptr %x; want %x", p, ptr)
-	}
-	if l != length {
-		t.Errorf("UnpackPtrLen returned length %x; want %x", l, length)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			packed := PackPtrLen(tt.ptr, tt.length)
+			assert.Equal(t, tt.want, packed, "packed value mismatch")
+
+			gotPtr, gotLen := UnpackPtrLen(packed)
+			assert.Equal(t, tt.ptr, gotPtr, "unpacked pointer mismatch")
+			assert.Equal(t, tt.length, gotLen, "unpacked length mismatch")
+		})
 	}
 }
 
-func TestPackPtrLen_Panic(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Errorf("PackPtrLen did not panic with null pointer and non-zero length")
-		}
-	}()
-	PackPtrLen(0, 100)
+func TestPackPtrLen_PanicsOnNullPointerWithLength(t *testing.T) {
+	assert.Panics(t, func() {
+		PackPtrLen(0, 100)
+	}, "expected panic for null pointer with non-zero length")
 }
 
-func TestUnpackPtrLen_Panic(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Errorf("UnpackPtrLen did not panic with null pointer and non-zero length")
-		}
-	}()
-	// invalid packed: ptr=0, len=1
-	packed := uint64(1)
-	UnpackPtrLen(packed)
+func TestUnpackPtrLen_PanicsOnInvalidPacked(t *testing.T) {
+	assert.Panics(t, func() {
+		// Invalid packed: ptr=0, len=1
+		UnpackPtrLen(uint64(1))
+	}, "expected panic for invalid packed value")
 }
 
 func TestAllocateDeallocate(t *testing.T) {
+	resetMemoryManager()
+
 	size := uint32(1024)
 	ptr := allocate(size)
-	if ptr == 0 {
-		t.Fatalf("allocate returned 0")
-	}
+	require.NotZero(t, ptr, "allocate returned 0")
 
-	// Check memory manager tracking
-	memoryManager.Lock()
-	buf, ok := memoryManager.ptrs[ptr]
-	memoryManager.Unlock()
+	// Verify allocation is tracked
+	allocCount, totalBytes := Stats()
+	assert.Equal(t, 1, allocCount, "expected 1 tracked allocation")
+	assert.Equal(t, int(size), totalBytes, "total bytes mismatch")
 
-	if !ok {
-		t.Errorf("allocated pointer not tracked in memoryManager")
-	}
-	if uint32(len(buf)) != size {
-		t.Errorf("allocated buffer size = %d; want %d", len(buf), size)
-	}
-
-	// Write to memory
+	// Write and read data
 	data := []byte("hello world")
 	copyToMemory(ptr, data)
-
-	// Read back
 	readData := readFromMemory(ptr, uint32(len(data)))
-	if string(readData) != string(data) {
-		t.Errorf("readFromMemory = %q; want %q", readData, data)
-	}
+	assert.Equal(t, data, readData, "memory read mismatch")
 
+	// Deallocate
 	deallocate(ptr, size)
 
-	// Check memory manager untracking
-	memoryManager.Lock()
-	_, ok = memoryManager.ptrs[ptr]
-	memoryManager.Unlock()
+	allocCount, totalBytes = Stats()
+	assert.Equal(t, 0, allocCount, "expected 0 tracked allocations after deallocate")
+	assert.Equal(t, 0, totalBytes, "expected 0 total bytes after deallocate")
+}
 
-	if ok {
-		t.Errorf("pointer still tracked after deallocate")
-	}
+func TestAllocate_ZeroSize(t *testing.T) {
+	ptr := allocate(0)
+	assert.Zero(t, ptr, "allocate(0) should return 0")
+}
+
+func TestDeallocate_Idempotent(t *testing.T) {
+	resetMemoryManager()
+
+	ptr := allocate(100)
+	deallocate(ptr, 100)
+	// Second deallocate should not panic or corrupt state
+	deallocate(ptr, 100)
+
+	_, totalBytes := Stats()
+	assert.GreaterOrEqual(t, totalBytes, 0, "total bytes should not be negative")
 }
 
 func TestFreeAllTracked(t *testing.T) {
-	// Reset state
-	FreeAllTracked()
+	resetMemoryManager()
 
-	// Allocate multiple
-	// p1 := allocate(100)
-	// p2 := allocate(200)
+	// Allocate multiple buffers
+	allocate(100)
+	allocate(200)
 
-	memoryManager.Lock()
-	count := len(memoryManager.ptrs)
-	memoryManager.Unlock()
-
-	if count != 2 {
-		t.Fatalf("expected 2 tracked pointers, got %d", count)
-	}
+	allocCount, _ := Stats()
+	require.Equal(t, 2, allocCount, "expected 2 tracked allocations")
 
 	FreeAllTracked()
 
-	memoryManager.Lock()
-	count = len(memoryManager.ptrs)
-	memoryManager.Unlock()
+	allocCount, totalBytes := Stats()
+	assert.Equal(t, 0, allocCount, "expected 0 allocations after FreeAllTracked")
+	assert.Equal(t, 0, totalBytes, "expected 0 bytes after FreeAllTracked")
+}
 
-	if count != 0 {
-		t.Errorf("expected 0 tracked pointers after FreeAllTracked, got %d", count)
-	}
+func TestStats(t *testing.T) {
+	resetMemoryManager()
 
-	// Pointers should still be valid memory (Go GC handles actual freeing),
-	// but they are no longer pinned by us.
-	// We can't easily test GC behavior here, but we verified map clearing.
+	allocCount, totalBytes := Stats()
+	assert.Equal(t, 0, allocCount)
+	assert.Equal(t, 0, totalBytes)
+
+	allocate(256)
+	allocate(512)
+
+	allocCount, totalBytes = Stats()
+	assert.Equal(t, 2, allocCount)
+	assert.Equal(t, 768, totalBytes)
+
+	FreeAllTracked()
 }
 
 func TestPtrFromBytes(t *testing.T) {
+	resetMemoryManager()
+
 	data := []byte("test data")
 	packed := PtrFromBytes(data)
 
-	_, length := UnpackPtrLen(packed)
-	if length != uint32(len(data)) {
-		t.Errorf("packed length = %d; want %d", length, len(data))
-	}
+	ptr, length := UnpackPtrLen(packed)
+	assert.NotZero(t, ptr, "expected non-zero pointer")
+	assert.Equal(t, uint32(len(data)), length, "length mismatch")
 
-	// Check content
+	// Verify content
 	readData := BytesFromPtr(packed)
-	if string(readData) != string(data) {
-		t.Errorf("BytesFromPtr = %q; want %q", readData, data)
-	}
+	assert.Equal(t, data, readData, "data mismatch")
 
 	DeallocatePacked(packed)
+
+	allocCount, _ := Stats()
+	assert.Equal(t, 0, allocCount, "expected 0 allocations after cleanup")
+}
+
+func TestPtrFromBytes_Empty(t *testing.T) {
+	packed := PtrFromBytes(nil)
+	assert.Zero(t, packed, "PtrFromBytes(nil) should return 0")
+
+	packed = PtrFromBytes([]byte{})
+	assert.Zero(t, packed, "PtrFromBytes([]) should return 0")
+}
+
+func TestBytesFromPtr_ZeroValues(t *testing.T) {
+	data := BytesFromPtr(0)
+	assert.Nil(t, data, "BytesFromPtr(0) should return nil")
+}
+
+func TestDeallocatePacked_ZeroValue(t *testing.T) {
+	// Should not panic
+	DeallocatePacked(0)
 }
 
 func TestConcurrency(t *testing.T) {
-	// Reset
-	FreeAllTracked()
+	resetMemoryManager()
 
 	var wg sync.WaitGroup
-	count := 100
+	iterations := 100
 
-	wg.Add(count)
-	for i := 0; i < count; i++ {
+	wg.Add(iterations)
+	for i := 0; i < iterations; i++ {
 		go func() {
 			defer wg.Done()
-			packed := PtrFromBytes([]byte("concurrent"))
-			// Simulate some work
+			packed := PtrFromBytes([]byte("concurrent test data"))
 			_ = BytesFromPtr(packed)
 			DeallocatePacked(packed)
 		}()
 	}
 	wg.Wait()
 
-	memoryManager.Lock()
-	tracked := len(memoryManager.ptrs)
-	memoryManager.Unlock()
+	allocCount, _ := Stats()
+	assert.Equal(t, 0, allocCount, "expected 0 allocations after concurrent operations")
+}
 
-	if tracked != 0 {
-		t.Errorf("race condition? expected 0 tracked pointers, got %d", tracked)
-	}
+func TestConfigure_WithMaxTotalAllocations(t *testing.T) {
+	resetMemoryManager()
+
+	// Configure with a small limit
+	Configure(WithMaxTotalAllocations(1024))
+
+	// This should succeed
+	ptr := allocate(512)
+	require.NotZero(t, ptr)
+	deallocate(ptr, 512)
+
+	// This should panic (exceeds limit)
+	assert.Panics(t, func() {
+		allocate(2048)
+	}, "expected panic when exceeding allocation limit")
+
+	// Reset to default for other tests
+	Configure(WithMaxTotalAllocations(DefaultMaxTotalAllocations))
+	FreeAllTracked()
+}
+
+func TestConfigure_InvalidLimit(t *testing.T) {
+	resetMemoryManager()
+
+	// Zero or negative limits should be ignored
+	Configure(WithMaxTotalAllocations(0))
+	Configure(WithMaxTotalAllocations(-100))
+
+	// Should still work with default limit
+	ptr := allocate(1024)
+	require.NotZero(t, ptr)
+	deallocate(ptr, 1024)
 }

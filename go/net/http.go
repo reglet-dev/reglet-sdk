@@ -1,19 +1,21 @@
 //go:build wasip1
 
-package net
+package sdknet
 
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
+	"github.com/reglet-dev/reglet-sdk/go/domain/entities"
 	"github.com/reglet-dev/reglet-sdk/go/internal/abi"
 	_ "github.com/reglet-dev/reglet-sdk/go/log" // Initialize WASM logging handler
-	"github.com/reglet-dev/reglet-sdk/go/wireformat"
 )
 
 // MaxHTTPBodySize is the maximum size of HTTP response body that can be returned.
@@ -28,7 +30,16 @@ func host_http_request(requestPacked uint64) uint64
 
 // WasmTransport implements http.RoundTripper for the WASM environment.
 // It intercepts standard library HTTP calls and routes them through the host function.
-type WasmTransport struct{}
+type WasmTransport struct {
+	// timeout is the request timeout (unexported, set via WithHTTPTimeout).
+	timeout time.Duration
+
+	// maxRedirects is the maximum redirects to follow (unexported, set via WithMaxRedirects).
+	maxRedirects int
+
+	// tlsConfig is the TLS configuration (unexported, set via WithTLSConfig).
+	tlsConfig *tls.Config
+}
 
 // RoundTrip implements the http.RoundTripper interface.
 func (t *WasmTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -170,6 +181,6 @@ func Do(req *http.Request) (*http.Response, error) {
 
 // Re-export HTTP wire format types from shared wireformat package
 type (
-	HTTPRequestWire  = wireformat.HTTPRequestWire
-	HTTPResponseWire = wireformat.HTTPResponseWire
+	HTTPRequestWire  = entities.HTTPRequest
+	HTTPResponseWire = entities.HTTPResponse
 )

@@ -1,7 +1,7 @@
 //go:build wasip1
 
 // Package net
-package net
+package sdknet
 
 import (
 	"context"

@@ -1,6 +1,6 @@
 //go:build wasip1
 
-package net
+package sdknet
 
 import (
 	"context"
@@ -10,9 +10,9 @@ import (
 	stdnet "net"
 	"time"
 
+	"github.com/reglet-dev/reglet-sdk/go/domain/entities"
 	"github.com/reglet-dev/reglet-sdk/go/internal/abi"
 	_ "github.com/reglet-dev/reglet-sdk/go/log" // Initialize WASM logging handler
-	"github.com/reglet-dev/reglet-sdk/go/wireformat"
 )
 
 // Define the host function signature for DNS lookups.
@@ -26,6 +26,12 @@ type WasmResolver struct {
 	// Nameserver is the address of the nameserver to use for resolution (e.g. "8.8.8.8:53").
 	// If empty, the host's default resolver is used.
 	Nameserver string
+
+	// timeout is the timeout for DNS queries (unexported, set via WithDNSTimeout).
+	timeout time.Duration
+
+	// retries is the number of retry attempts (unexported, set via WithRetries).
+	retries int
 }
 
 // LookupHost resolves IP addresses for a given host using the host function.
@@ -69,9 +75,9 @@ func (r *WasmResolver) LookupIPAddr(ctx context.Context, host string) ([]stdnet.
 }
 
 // Lookup performs the actual DNS query via the host function.
-func (r *WasmResolver) Lookup(ctx context.Context, hostname, recordType string) (*wireformat.DNSResponseWire, error) {
+func (r *WasmResolver) Lookup(ctx context.Context, hostname, recordType string) (*entities.DNSResponse, error) {
 	wireCtx := createContextWireFormat(ctx)
-	request := wireformat.DNSRequestWire{ // Use wireformat's DNSRequestWire
+	request := entities.DNSRequest{ // Use wireformat's DNSRequestWire
 		Context:    wireCtx,
 		Hostname:   hostname,
 		Type:       recordType,
@@ -90,7 +96,7 @@ func (r *WasmResolver) Lookup(ctx context.Context, hostname, recordType string) 
 	responseBytes := abi.BytesFromPtr(responsePacked)
 	abi.DeallocatePacked(responsePacked) // Free memory on Guest side (allocated by Host for result)
 
-	var response wireformat.DNSResponseWire
+	var response entities.DNSResponse
 	if err := json.Unmarshal(responseBytes, &response); err != nil {
 		return nil, fmt.Errorf("sdk: failed to unmarshal DNS response: %w", err)
 	}
@@ -150,7 +156,7 @@ func (r *WasmResolver) LookupMX(ctx context.Context, host string) ([]string, err
 }
 
 // LookupMXRecords returns structured MX records
-func (r *WasmResolver) LookupMXRecords(ctx context.Context, host string) ([]wireformat.MXRecordWire, error) {
+func (r *WasmResolver) LookupMXRecords(ctx context.Context, host string) ([]entities.MXRecord, error) {
 	resp, err := r.Lookup(ctx, host, "MX")
 	if err != nil {
 		return nil, err

@@ -1,18 +1,19 @@
-// Package net provides network operations for Reglet WASM plugins.
-package net //nolint:revive // intentional name to mirror Go stdlib net package
+// Package sdknet provides network operations for Reglet WASM plugins.
+package sdknet
 
 import (
-	"github.com/reglet-dev/reglet-sdk/go/wireformat"
+	"github.com/reglet-dev/reglet-sdk/go/domain/entities"
 )
 
-// Re-export wire format types from shared wireformat package
-// This file has no build tags so tests can use these types
+// Re-export wire format types from entities package for backward compatibility.
+// These types serve as both domain entities and JSON wire protocol structures.
 type (
-	ContextWireFormat = wireformat.ContextWireFormat
-	DNSRequestWire    = wireformat.DNSRequestWire
-	DNSResponseWire   = wireformat.DNSResponseWire
-	TCPRequestWire    = wireformat.TCPRequestWire
-	TCPResponseWire   = wireformat.TCPResponseWire
-	SMTPRequestWire   = wireformat.SMTPRequestWire
-	SMTPResponseWire  = wireformat.SMTPResponseWire
+	ContextWireFormat = entities.ContextWire
+	DNSRequestWire    = entities.DNSRequest
+	DNSResponseWire   = entities.DNSResponse
+	MXRecordWire      = entities.MXRecord
+	TCPRequestWire    = entities.TCPRequest
+	TCPResponseWire   = entities.TCPResponse
+	SMTPRequestWire   = entities.SMTPRequest
+	SMTPResponseWire  = entities.SMTPResponse
 )
