@@ -6,6 +6,7 @@ require (
 	github.com/go-playground/validator/v10 v10.30.1
 	github.com/invopop/jsonschema v0.13.0
 	github.com/stretchr/testify v1.11.1
+	github.com/tetratelabs/wazero v1.11.0
 )
 
 require (

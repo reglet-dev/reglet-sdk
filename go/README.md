@@ -28,67 +28,70 @@ go get github.com/reglet-dev/reglet-sdk/go
 package main
 
 import (
-    "context"
-    "log/slog"
+	"context"
+	"log/slog"
 
-    sdk "github.com/reglet-dev/reglet-sdk/go"
-    _ "github.com/reglet-dev/reglet-sdk/go/log" // Initialize logging
+	"github.com/reglet-dev/reglet-sdk/go/application/plugin"
+	"github.com/reglet-dev/reglet-sdk/go/application/schema"
+	"github.com/reglet-dev/reglet-sdk/go/domain/entities"
 )
 
 type MyPlugin struct{}
 
 func main() {
-    sdk.Register(&MyPlugin{})
+	plugin.Register(&MyPlugin{})
 }
 
-func (p *MyPlugin) Describe(ctx context.Context) (sdk.Metadata, error) {
-    return sdk.Metadata{
-        Name:         "my-plugin",
-        Version:      "1.0.0",
-        Description:  "Example compliance check plugin",
-        Capabilities: []sdk.Capability{
-            {Kind: "network:outbound", Pattern: "example.com:443"},
-        },
-    }, nil
+func (p *MyPlugin) Describe(ctx context.Context) (entities.Metadata, error) {
+	return entities.Metadata{
+		Name:         "my-plugin",
+		Version:      "1.0.0",
+		Description:  "Example compliance check plugin",
+		Capabilities: []entities.Capability{
+			entities.NewCapability("network:outbound", "example.com:443"),
+		},
+	}, nil
+}
+
+type Config struct {
+	Hostname string `json:"hostname" jsonschema:"description=Hostname to check"`
 }
 
 func (p *MyPlugin) Schema(ctx context.Context) ([]byte, error) {
-    return sdk.GenerateSchema(struct {
-        Hostname string `json:"hostname" description:"Hostname to check"`
-    }{})
+	return schema.GenerateSchema(Config{})
 }
 
-func (p *MyPlugin) Check(ctx context.Context, config sdk.Config) (sdk.Evidence, error) {
-    hostname, err := sdk.MustGetString(config, "hostname")
-    if err != nil {
-        return sdk.Failure("config", err.Error()), nil
-    }
+func (p *MyPlugin) Check(ctx context.Context, configMap map[string]any) (entities.Result, error) {
+	// ... config loading ...
+	hostname := "example.com"
 
-    slog.InfoContext(ctx, "Starting check", "hostname", hostname)
+	slog.InfoContext(ctx, "Starting check", "hostname", hostname)
 
-    // Plugin logic here...
+	// Plugin logic here...
 
-    return sdk.Success(map[string]interface{}{
-        "hostname": hostname,
-        "status":   "ok",
-    }), nil
+	return entities.ResultSuccess("Check passed", map[string]any{
+		"hostname": hostname,
+		"status":   "ok",
+	}), nil
 }
 ```
 
 ### Building
 
 ```bash
-GOOS=wasip1 GOARCH=wasm go build -o plugin.wasm main.go
+GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o plugin.wasm main.go
 ```
 
 ## Package Documentation
 
 Detailed documentation for each subpackage:
 
+- **[host](host/doc.go)** - Host runtime execution (WASM engine)
+- **[application/plugin](application/plugin/doc.go)** - Plugin development helpers
+- **[application/schema](application/schema/generator.go)** - JSON Schema generation
 - **[exec](exec/README.md)** - Command execution
 - **[log](log/README.md)** - Structured logging
 - **[net](net/README.md)** - Network operations (DNS, HTTP, TCP)
-- **[internal/abi](internal/abi/README.md)** - WASM ABI and memory management (internal)
 
 ## Core Concepts
 
@@ -99,13 +102,13 @@ Every plugin must implement three methods:
 ```go
 type Plugin interface {
     // Describe returns metadata about the plugin
-    Describe(ctx context.Context) (Metadata, error)
+    Describe(ctx context.Context) (entities.Metadata, error)
 
     // Schema returns JSON schema for plugin configuration
     Schema(ctx context.Context) ([]byte, error)
 
     // Check executes the main plugin logic
-    Check(ctx context.Context, config Config) (Evidence, error)
+    Check(ctx context.Context, config map[string]any) (entities.Result, error)
 }
 ```
 
@@ -214,15 +217,18 @@ See [net/README.md](net/README.md) for full HTTP API documentation.
 ### TCP Connections
 
 ```go
-import sdknet "github.com/reglet-dev/reglet-sdk/go/net"
+import (
+	sdknet "github.com/reglet-dev/reglet-sdk/go/net"
+	"github.com/reglet-dev/reglet-sdk/go/domain/entities"
+)
 
 // DialTCP(ctx, host, port, timeoutMs, useTLS)
 conn, err := sdknet.DialTCP(ctx, "example.com", "443", 5000, true)
 if err != nil {
-    return sdk.Failure("tcp", err.Error()), nil
+    return entities.ResultFailure("tcp connection failed", map[string]any{"error": err.Error()}), nil
 }
 
-return sdk.Success(map[string]interface{}{
+return entities.ResultSuccess("connected", map[string]any{
     "connected":      conn.Connected,
     "tls":            conn.TLS,
     "tls_version":    conn.TLSVersion,
@@ -237,7 +243,10 @@ See [net/README.md](net/README.md) for full TCP API documentation.
 Execute host commands via sandboxed interface:
 
 ```go
-import "github.com/reglet-dev/reglet-sdk/go/exec"
+import (
+	"github.com/reglet-dev/reglet-sdk/go/exec"
+	"github.com/reglet-dev/reglet-sdk/go/domain/entities"
+)
 
 req := exec.CommandRequest{
     Command: "systemctl",
@@ -246,12 +255,12 @@ req := exec.CommandRequest{
 
 result, err := exec.Run(ctx, req)
 if err != nil {
-    return sdk.Failure("exec", err.Error()), nil
+    return entities.ResultFailure("execution error", map[string]any{"error": err.Error()}), nil
 }
 
 serviceActive := result.ExitCode == 0
 
-return sdk.Success(map[string]interface{}{
+return entities.ResultSuccess("service checked", map[string]any{
     "service": "nginx",
     "active":  serviceActive,
     "stdout":  result.Stdout,
@@ -267,10 +276,11 @@ Use Go's standard `log/slog` package:
 ```go
 import (
     "log/slog"
+    "github.com/reglet-dev/reglet-sdk/go/domain/entities"
     _ "github.com/reglet-dev/reglet-sdk/go/log" // Initialize WASM logging
 )
 
-func (p *MyPlugin) Check(ctx context.Context, config sdk.Config) (sdk.Evidence, error) {
+func (p *MyPlugin) Check(ctx context.Context, config map[string]any) (entities.Result, error) {
     // Context-aware logging (recommended)
     slog.InfoContext(ctx, "Starting check", "config_keys", len(config))
 
@@ -278,11 +288,9 @@ func (p *MyPlugin) Check(ctx context.Context, config sdk.Config) (sdk.Evidence, 
     slog.Debug("Processing item", "item_id", 123, "status", "pending")
 
     // Error logging
-    if err != nil {
-        slog.ErrorContext(ctx, "Operation failed", "error", err, "retry_count", 3)
-    }
+    // ...
 
-    return sdk.Success(nil), nil
+    return entities.ResultSuccess("ok", nil), nil
 }
 ```
 
@@ -290,25 +298,24 @@ See [log/README.md](log/README.md) for full logging API documentation.
 
 ## Schema Generation
 
-Generate JSON Schema from Go structs:
+Generate JSON Schema from Go structs using `application/schema`:
 
 ```go
+import "github.com/reglet-dev/reglet-sdk/go/application/schema"
+
 type PluginConfig struct {
-    Hostname string `json:"hostname" description:"Target hostname"`
-    Port     int    `json:"port" default:"443" description:"Target port"`
-    Timeout  int    `json:"timeout,omitempty" description:"Request timeout in seconds"`
+    Hostname string `json:"hostname" jsonschema:"description=Target hostname"`
+    Port     int    `json:"port" jsonschema:"default=443,description=Target port"`
 }
 
 func (p *MyPlugin) Schema(ctx context.Context) ([]byte, error) {
-    return sdk.GenerateSchema(PluginConfig{})
+    return schema.GenerateSchema(PluginConfig{})
 }
 ```
 
 **Supported Tags:**
-- `json:"field_name"` - Field name in schema
-- `json:",omitempty"` - Field is optional
-- `description:"..."` - Field description
-- `default:"..."` - Default value
+- `json:"name"` - Field name
+- `jsonschema:"..."` - Schema attributes (default, description, etc.)
 
 ## Error Handling
 
@@ -316,31 +323,18 @@ Use SDK error helpers for consistent error reporting:
 
 ```go
 // Success
-return sdk.Success(map[string]interface{}{
+return entities.ResultSuccess("Check passed", map[string]any{
     "result": "ok",
 }), nil
 
 // Simple failure
-return sdk.Failure("validation", "Invalid hostname format"), nil
+return entities.ResultFailure("Invalid hostname format", nil), nil
 
 // Network error
-return sdk.Evidence{
-    Status: false,
-    Error: sdk.ToErrorDetail(&sdk.NetworkError{
-        Operation: "connect",
-        Target:    "example.com:443",
-        Err:       err,
-    }),
-}, nil
+return entities.ResultError(entities.NewErrorDetail("network", err.Error())), nil
 
 // Configuration error
-return sdk.Evidence{
-    Status: false,
-    Error: sdk.ToErrorDetail(&sdk.ConfigError{
-        Field: "hostname",
-        Err:   fmt.Errorf("missing required field"),
-    }),
-}, nil
+return entities.ResultError(entities.NewErrorDetail("config", "missing required field")), nil
 ```
 
 ## Capabilities
@@ -348,22 +342,15 @@ return sdk.Evidence{
 Request capabilities in `Describe()`:
 
 ```go
-func (p *MyPlugin) Describe(ctx context.Context) (sdk.Metadata, error) {
-    return sdk.Metadata{
+func (p *MyPlugin) Describe(ctx context.Context) (entities.Metadata, error) {
+    return entities.Metadata{
         Name:    "my-plugin",
         Version: "1.0.0",
-        Capabilities: []sdk.Capability{
-            // Network access to specific host
-            {Kind: "network:outbound", Pattern: "api.example.com:443"},
-
-            // DNS resolution
-            {Kind: "network:dns", Pattern: "*"},
-
-            // Command execution
-            {Kind: "exec", Pattern: "systemctl"},
-
-            // Filesystem read
-            {Kind: "fs:read", Pattern: "/etc/nginx/*.conf"},
+        Capabilities: []entities.Capability{
+            entities.NewCapability("network:outbound", "api.example.com:443"),
+            entities.NewCapability("network:dns", "*"),
+            entities.NewCapability("exec", "systemctl"),
+            entities.NewCapability("fs:read", "/etc/nginx/*.conf"),
         },
     }, nil
 }
@@ -416,7 +403,7 @@ ips, err := resolver.LookupHost(ctx, hostname)
 ```go
 resp, err := sdknet.Get(ctx, url)
 if err != nil {
-    return sdk.Failure("http", err.Error()), nil
+    return entities.ResultError(entities.NewErrorDetail("http", err.Error())), nil
 }
 defer resp.Body.Close() // ✅ Always defer close
 
@@ -439,12 +426,12 @@ slog.Info("User logged in", "user_id", userID)
 result, err := exec.Run(ctx, req)
 if err != nil {
     // Unexpected error (command not found, permission denied)
-    return sdk.Failure("exec", err.Error()), nil
+    return entities.ResultError(entities.NewErrorDetail("exec", err.Error())), nil
 }
 
 if result.ExitCode != 0 {
     // Expected non-zero exit (command ran but failed)
-    return sdk.Success(map[string]interface{}{
+    return entities.ResultSuccess("Check failed", map[string]any{
         "check_passed": false,
         "exit_code":    result.ExitCode,
         "stderr":       result.Stderr,
@@ -469,15 +456,15 @@ if result.ExitCode != 0 {
 ```go
 func TestMyPlugin_Check(t *testing.T) {
     plugin := &MyPlugin{}
-    config := sdk.Config{
+    config := map[string]any{
         "hostname": "example.com",
     }
 
     ctx := context.Background()
-    evidence, err := plugin.Check(ctx, config)
+    result, err := plugin.Check(ctx, config)
 
     require.NoError(t, err)
-    assert.True(t, evidence.Status)
+    assert.Equal(t, entities.ResultStatusSuccess, result.Status)
 }
 ```
 
@@ -523,26 +510,21 @@ reglet check --profile test-profile.yaml
 
 ## Config Helpers
 
-The SDK provides safe config extraction functions to prevent panics from direct type assertions:
+The `application/config` package provides safe extraction functions:
 
 ```go
+import "github.com/reglet-dev/reglet-sdk/go/application/config"
+
 // Required fields - returns error if missing
-hostname, err := sdk.MustGetString(config, "hostname")
-port, err := sdk.MustGetInt(config, "port")
-enabled, err := sdk.MustGetBool(config, "enabled")
-ratio, err := sdk.MustGetFloat(config, "ratio")
+hostname, err := config.MustGetString(cfgMap, "hostname")
+port, err := config.MustGetInt(cfgMap, "port")
 
 // Optional fields with defaults
-timeout := sdk.GetIntDefault(config, "timeout", 30)
-protocol := sdk.GetStringDefault(config, "protocol", "https")
-verbose := sdk.GetBoolDefault(config, "verbose", false)
-threshold := sdk.GetFloatDefault(config, "threshold", 0.5)
+timeout := config.GetIntDefault(cfgMap, "timeout", 30)
+protocol := config.GetStringDefault(cfgMap, "protocol", "https")
 
-// Safe extraction (returns ok=false if missing or wrong type)
-value, ok := sdk.GetString(config, "optional_field")
-number, ok := sdk.GetInt(config, "optional_number")
-decimal, ok := sdk.GetFloat(config, "optional_decimal")
-tags, ok := sdk.GetStringSlice(config, "tags")
+// Safe extraction
+value, ok := config.GetString(cfgMap, "optional_field")
 ```
 
 ## Examples
