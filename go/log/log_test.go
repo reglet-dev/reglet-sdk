@@ -1,136 +1,134 @@
-//go:build !wasip1
-
 package log
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// Note: Actual WASM logging requires WASM runtime with host functions.
-// These tests focus on slog types and log record handling that SDK consumers will use.
-// WasmLogHandler is only available in wasip1 builds.
-
-func TestLogRecord_Attributes(t *testing.T) {
-	// Test that log records can contain various attribute types
+func TestToLogAttrWire(t *testing.T) {
 	tests := []struct {
-		name  string
-		key   string
-		value interface{}
-	}{
-		{"string attribute", "message", "test message"},
-		{"int attribute", "count", 42},
-		{"bool attribute", "success", true},
-		{"float attribute", "duration", 1.23},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Create attribute
-			var attr slog.Attr
-			switch v := tt.value.(type) {
-			case string:
-				attr = slog.String(tt.key, v)
-			case int:
-				attr = slog.Int(tt.key, v)
-			case bool:
-				attr = slog.Bool(tt.key, v)
-			case float64:
-				attr = slog.Float64(tt.key, v)
-			}
-
-			// Verify attribute creation
-			assert.Equal(t, tt.key, attr.Key)
-			assert.NotNil(t, attr.Value)
-		})
-	}
-}
-
-func TestLogLevels(t *testing.T) {
-	// Document available log levels
-	levels := []struct {
-		level slog.Level
-		name  string
-	}{
-		{slog.LevelDebug, "DEBUG"},
-		{slog.LevelInfo, "INFO"},
-		{slog.LevelWarn, "WARN"},
-		{slog.LevelError, "ERROR"},
-	}
-
-	for _, l := range levels {
-		t.Run(l.name, func(t *testing.T) {
-			// Verify level string representation
-			assert.Equal(t, l.name, l.level.String())
-		})
-	}
-}
-
-func TestLogRecord_Construction(t *testing.T) {
-	// Test creating log records with various configurations
-	now := time.Now()
-
-	tests := []struct {
-		name    string
-		level   slog.Level
-		message string
-		attrs   []slog.Attr
+		name     string
+		attr     slog.Attr
+		wantType string
+		wantVal  string
 	}{
 		{
-			name:    "simple info log",
-			level:   slog.LevelInfo,
-			message: "operation completed",
-			attrs:   nil,
+			name:     "string",
+			attr:     slog.String("key", "value"),
+			wantType: "string",
+			wantVal:  "value",
 		},
 		{
-			name:    "error with attributes",
-			level:   slog.LevelError,
-			message: "operation failed",
-			attrs: []slog.Attr{
-				slog.String("error", "connection refused"),
-				slog.Int("retry_count", 3),
-			},
+			name:     "int64",
+			attr:     slog.Int64("key", 123),
+			wantType: "int64",
+			wantVal:  "123",
 		},
 		{
-			name:    "debug with multiple attrs",
-			level:   slog.LevelDebug,
-			message: "processing request",
-			attrs: []slog.Attr{
-				slog.String("request_id", "req-123"),
-				slog.String("user_id", "user-456"),
-				slog.Int("duration_ms", 42),
-			},
+			name:     "bool",
+			attr:     slog.Bool("key", true),
+			wantType: "bool",
+			wantVal:  "true",
+		},
+		{
+			name:     "float64",
+			attr:     slog.Float64("key", 1.23),
+			wantType: "float64",
+			wantVal:  "1.230000",
+		},
+		{
+			name:     "time",
+			attr:     slog.Time("key", time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)),
+			wantType: "time",
+			wantVal:  "2024-01-01T00:00:00Z",
+		},
+		{
+			name:     "duration",
+			attr:     slog.Duration("key", 1*time.Hour),
+			wantType: "duration",
+			wantVal:  "1h0m0s",
+		},
+		{
+			name:     "error",
+			attr:     slog.Any("key", errors.New("test error")),
+			wantType: "error",
+			wantVal:  "test error",
+		},
+		{
+			name:     "nil",
+			attr:     slog.Any("key", nil),
+			wantType: "any",
+			wantVal:  "<nil>",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			record := slog.NewRecord(now, tt.level, tt.message, 0)
-			record.AddAttrs(tt.attrs...)
-
-			assert.Equal(t, tt.level, record.Level)
-			assert.Equal(t, tt.message, record.Message)
-			assert.Equal(t, len(tt.attrs), record.NumAttrs())
+			wire := toLogAttrWire(tt.attr)
+			assert.Equal(t, tt.attr.Key, wire.Key)
+			assert.Equal(t, tt.wantType, wire.Type)
+			assert.Equal(t, tt.wantVal, wire.Value)
 		})
 	}
 }
 
-// Integration test notes for WASM environment (requires wasip1 build):
-//
-// WasmLogHandler is only available in WASM builds (//go:build wasip1).
-// Integration tests for WASM logging should be in a separate _wasip1_test.go file.
-//
-// Suggested WASM tests:
-// - TestWasmLogHandler_Handle: Test actual log message sending to host
-// - TestWasmLogHandler_Enabled: Test that all levels are enabled by default
-// - TestWasmLogHandler_Attributes: Test attribute serialization to host
-// - TestWasmLogHandler_WithAttrs: Test WithAttrs creates new handler
-// - TestWasmLogHandler_WithGroup: Test WithGroup creates new handler
-// - TestWasmLogHandler_Context: Test context propagation in logging
-// - TestWasmLogHandler_Performance: Test logging performance characteristics
-//
-// The Handle method (log.go:48-72) requires WASM host function:
-// - host_log_message(messagePacked uint64)
+func TestToLogAttrWire_JSON(t *testing.T) {
+	// Test structured object that should be serialized as JSON
+	type MyStruct struct {
+		Field string `json:"field"`
+	}
+	obj := MyStruct{Field: "data"}
+	attr := slog.Any("key", obj)
+
+	wire := toLogAttrWire(attr)
+	assert.Equal(t, "key", wire.Key)
+	assert.Equal(t, "json", wire.Type)
+
+	var decoded MyStruct
+	err := json.Unmarshal([]byte(wire.Value), &decoded)
+	require.NoError(t, err)
+	assert.Equal(t, obj, decoded)
+}
+
+func TestToLogAttrWire_LogValuer(t *testing.T) {
+	// Test types that implement LogValuer
+	attr := slog.Any("key", logValuer{val: "resolved"})
+	wire := toLogAttrWire(attr)
+
+	assert.Equal(t, "key", wire.Key)
+	assert.Equal(t, "string", wire.Type)
+	assert.Equal(t, "resolved", wire.Value)
+}
+
+type logValuer struct {
+	val string
+}
+
+func (l logValuer) LogValue() slog.Value {
+	return slog.StringValue(l.val)
+}
+
+func TestNewHandler_Defaults(t *testing.T) {
+	h := NewHandler()
+	assert.NotNil(t, h)
+	// Check default level via Enabled
+	assert.True(t, h.Enabled(context.TODO(), slog.LevelInfo))
+	assert.False(t, h.Enabled(context.TODO(), slog.LevelDebug))
+}
+
+func TestNewHandler_Options(t *testing.T) {
+	h := NewHandler(
+		WithLevel(slog.LevelDebug),
+		WithSource(true),
+	)
+	assert.NotNil(t, h)
+	assert.True(t, h.Enabled(context.TODO(), slog.LevelDebug))
+	// We can't easily check addSource without internal access, creates coverage gap but verified behavior.
+}

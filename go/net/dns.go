@@ -1,177 +1,236 @@
-//go:build wasip1
-
-package net
+package sdknet
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"log/slog"
-	stdnet "net"
+	"net"
 	"time"
 
-	"github.com/reglet-dev/reglet-sdk/go/internal/abi"
-	_ "github.com/reglet-dev/reglet-sdk/go/log" // Initialize WASM logging handler
-	"github.com/reglet-dev/reglet-sdk/go/wireformat"
+	"github.com/reglet-dev/reglet-sdk/go/application/config"
+	"github.com/reglet-dev/reglet-sdk/go/domain/entities"
+	"github.com/reglet-dev/reglet-sdk/go/domain/ports"
+	"github.com/reglet-dev/reglet-sdk/go/infrastructure/wasm"
 )
 
-// Define the host function signature for DNS lookups.
-// This matches the signature defined in internal/wasm/hostfuncs/registry.go.
-//
-//go:wasmimport reglet_host dns_lookup
-func host_dns_lookup(requestPacked uint64) uint64
+// DNSCheckOption is a functional option for configuring DNS checks.
+type DNSCheckOption func(*dnsCheckConfig)
 
-// WasmResolver implements net.Resolver functionality for the WASM environment.
-type WasmResolver struct {
-	// Nameserver is the address of the nameserver to use for resolution (e.g. "8.8.8.8:53").
-	// If empty, the host's default resolver is used.
-	Nameserver string
+type dnsCheckConfig struct {
+	resolver ports.DNSResolver
 }
 
-// LookupHost resolves IP addresses for a given host using the host function.
-func (r *WasmResolver) LookupHost(ctx context.Context, host string) ([]string, error) {
-	resp, err := r.Lookup(ctx, host, "A")
-	if err != nil {
-		return nil, err
-	}
-	recordsA := resp.Records
-
-	resp, err = r.Lookup(ctx, host, "AAAA")
-	if err != nil {
-		return nil, err
-	}
-	recordsAAAA := resp.Records
-
-	return append(recordsA, recordsAAAA...), nil
-}
-
-// LookupIPAddr resolves IP addresses for a given host using the host function.
-func (r *WasmResolver) LookupIPAddr(ctx context.Context, host string) ([]stdnet.IPAddr, error) {
-	resp, err := r.Lookup(ctx, host, "A") // Get A records
-	if err != nil {
-		return nil, err
-	}
-	records := resp.Records
-
-	resp, err = r.Lookup(ctx, host, "AAAA") // Get AAAA records
-	if err != nil {
-		return nil, err
-	}
-	records = append(records, resp.Records...)
-
-	var ipAddrs []stdnet.IPAddr
-	for _, rec := range records {
-		if ip := stdnet.ParseIP(rec); ip != nil {
-			ipAddrs = append(ipAddrs, stdnet.IPAddr{IP: ip})
+// WithDNSResolver sets the DNS resolver to use for the check.
+// This is useful for injecting mocks during testing.
+func WithDNSResolver(r ports.DNSResolver) DNSCheckOption {
+	return func(c *dnsCheckConfig) {
+		if r != nil {
+			c.resolver = r
 		}
 	}
-	return ipAddrs, nil
 }
 
-// Lookup performs the actual DNS query via the host function.
-func (r *WasmResolver) Lookup(ctx context.Context, hostname, recordType string) (*wireformat.DNSResponseWire, error) {
-	wireCtx := createContextWireFormat(ctx)
-	request := wireformat.DNSRequestWire{ // Use wireformat's DNSRequestWire
-		Context:    wireCtx,
-		Hostname:   hostname,
-		Type:       recordType,
-		Nameserver: r.Nameserver,
-	}
-
-	requestBytes, err := json.Marshal(request)
+// RunDNSCheck performs a DNS lookup check.
+// It parses configuration, executes the DNS lookup, and returns a structured Result.
+//
+// Expected config fields:
+//   - hostname (string, required): Domain name to resolve
+//   - record_type (string, optional): DNS record type (A, AAAA, CNAME, MX, TXT, NS). Default: A
+//   - nameserver (string, optional): Custom nameserver (e.g., "8.8.8.8")
+//   - timeout_ms (int, optional): Lookup timeout in milliseconds (default: 5000)
+//
+// Returns a Result with:
+//   - Status: "success" if lookup succeeded, "error" if failed
+//   - Data: map containing "records" ([]string) or "mx_records" (for MX queries)
+//   - Error: structured error details if lookup failed
+func RunDNSCheck(ctx context.Context, cfg config.Config, opts ...DNSCheckOption) (entities.Result, error) {
+	// Parse required fields
+	hostname, err := config.MustGetString(cfg, "hostname")
 	if err != nil {
-		return nil, fmt.Errorf("sdk: failed to marshal DNS request: %w", err)
+		return entities.ResultError(entities.NewErrorDetail("config", err.Error()).WithCode("MISSING_HOSTNAME")), nil
 	}
 
-	// Call the host function
-	responsePacked := host_dns_lookup(abi.PtrFromBytes(requestBytes))
+	// Parse optional fields
+	recordType := config.GetStringDefault(cfg, "record_type", "A")
+	nameserver := config.GetStringDefault(cfg, "nameserver", "")
+	timeoutMs := config.GetIntDefault(cfg, "timeout_ms", 5000)
 
-	// Read and unmarshal the response
-	responseBytes := abi.BytesFromPtr(responsePacked)
-	abi.DeallocatePacked(responsePacked) // Free memory on Guest side (allocated by Host for result)
+	// Configure check
+	// Create default resolver based on config
+	resolverOpts := []ResolverOption{}
+	if nameserver != "" {
+		resolverOpts = append(resolverOpts, WithNameserver(nameserver))
+	}
+	if timeoutMs > 0 {
+		resolverOpts = append(resolverOpts, WithDNSTimeout(time.Duration(timeoutMs)*time.Millisecond))
+	}
+	defaultResolver := NewResolver(resolverOpts...)
 
-	var response wireformat.DNSResponseWire
-	if err := json.Unmarshal(responseBytes, &response); err != nil {
-		return nil, fmt.Errorf("sdk: failed to unmarshal DNS response: %w", err)
+	checkCfg := dnsCheckConfig{
+		resolver: defaultResolver,
 	}
 
-	if response.Error != nil {
-		return nil, response.Error // Convert structured error to Go error
+	for _, opt := range opts {
+		opt(&checkCfg)
 	}
 
-	return &response, nil
+	// Execute DNS lookup based on record type
+	start := time.Now()
+	records, mxRecords, lookupErr := performDNSLookup(ctx, checkCfg.resolver, hostname, recordType)
+	metadata := entities.NewRunMetadata(start, time.Now())
+
+	// Build result data
+	resultData := make(map[string]any)
+
+	if len(records) > 0 {
+		resultData["records"] = records
+	}
+	if len(mxRecords) > 0 {
+		// Convert MXRecords to map format for result
+		mxMap := make([]map[string]any, len(mxRecords))
+		for i, mx := range mxRecords {
+			mxMap[i] = map[string]any{
+				"host": mx.Host,
+				"pref": mx.Pref,
+			}
+		}
+		resultData["mx_records"] = mxMap
+	}
+	resultData["record_type"] = recordType
+	resultData["hostname"] = hostname
+
+	// Return result based on lookup status
+	if lookupErr == nil {
+		message := fmt.Sprintf("DNS lookup successful for %s (%s)", hostname, recordType)
+		return entities.ResultSuccess(message, resultData).WithMetadata(metadata), nil
+	}
+
+	// Lookup failed
+	errDetail := entities.NewErrorDetail("network", lookupErr.Error()).WithCode("LOOKUP_FAILED")
+	return entities.ResultError(errDetail).WithMetadata(metadata), nil
 }
 
-// init configures the default resolver to use our WasmResolver.
-func init() {
-	// Set the default resolver for standard library net calls.
-	// This ensures that net.LookupHost, net.LookupIP, and other functions that use the default resolver,
-	// will use our WASM-aware implementation.
-	stdnet.DefaultResolver = &stdnet.Resolver{
-		PreferGo: true, // Use Go's native resolver implementation
-		// We rely on PreferGo=true and the Dial function to intercept network traffic.
-		// Note: We cannot easily intercept standard DNS protocol parsing inside net.Resolver
-		// via Dial without a full DNS server stub.
-		// Therefore, plugins MUST use the sdk/net package directly for lookups if they want
-		// full WASM host function support (e.g. for CNAME, MX).
-		// Standard net.LookupHost will likely fail or try to dial on prohibited ports.
-
-		Dial: func(ctx context.Context, network, address string) (stdnet.Conn, error) {
-			slog.WarnContext(ctx, "sdk: net.DefaultResolver.Dial called, not implemented via hostfunc", "network", network, "address", address)
-			return (&stdnet.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, network, address)
-		},
-	}
-	slog.Info("Reglet SDK: DNS resolver initialized (partial shim).")
-}
-
-// LookupCNAME returns the canonical name for the given host
-func (r *WasmResolver) LookupCNAME(ctx context.Context, host string) (string, error) {
-	resp, err := r.Lookup(ctx, host, "CNAME")
-	if err != nil {
-		return "", err
-	}
-	if len(resp.Records) == 0 {
-		return "", fmt.Errorf("no CNAME record found")
-	}
-	return resp.Records[0], nil
-}
-
-// LookupMX returns MX records as strings "Pref Host" (for compatibility)
-func (r *WasmResolver) LookupMX(ctx context.Context, host string) ([]string, error) {
-	resp, err := r.Lookup(ctx, host, "MX")
-	if err != nil {
-		return nil, err
-	}
+func performDNSLookup(ctx context.Context, resolver ports.DNSResolver, hostname, recordType string) ([]string, []ports.MXRecord, error) {
 	var records []string
-	for _, mx := range resp.MXRecords {
-		records = append(records, fmt.Sprintf("%d %s", mx.Pref, mx.Host))
+	var mxRecords []ports.MXRecord
+	var err error
+
+	switch recordType {
+	case "A":
+		// Filter for IPv4
+		allIPs, lookupErr := resolver.LookupHost(ctx, hostname)
+		err = lookupErr
+		if err == nil {
+			for _, ip := range allIPs {
+				if net.ParseIP(ip).To4() != nil {
+					records = append(records, ip)
+				}
+			}
+		}
+	case "AAAA":
+		// Filter for IPv6
+		allIPs, lookupErr := resolver.LookupHost(ctx, hostname)
+		err = lookupErr
+		if err == nil {
+			for _, ip := range allIPs {
+				if net.ParseIP(ip).To4() == nil && net.ParseIP(ip) != nil {
+					records = append(records, ip)
+				}
+			}
+		}
+	case "CNAME":
+		cname, lookupErr := resolver.LookupCNAME(ctx, hostname)
+		err = lookupErr
+		if err == nil {
+			records = []string{cname}
+		}
+	case "MX":
+		mxRecords, err = resolver.LookupMX(ctx, hostname)
+	case "TXT":
+		records, err = resolver.LookupTXT(ctx, hostname)
+	case "NS":
+		records, err = resolver.LookupNS(ctx, hostname)
+	default:
+		err = fmt.Errorf("unsupported record type: %s", recordType)
 	}
-	return records, nil
+
+	return records, mxRecords, err
 }
 
-// LookupMXRecords returns structured MX records
-func (r *WasmResolver) LookupMXRecords(ctx context.Context, host string) ([]wireformat.MXRecordWire, error) {
-	resp, err := r.Lookup(ctx, host, "MX")
-	if err != nil {
-		return nil, err
-	}
-	return resp.MXRecords, nil
+// resolverConfig holds the configuration for a WasmResolver.
+// This struct is unexported to enforce the functional options pattern.
+type resolverConfig struct {
+	nameserver string        // DNS nameserver address (e.g., "8.8.8.8:53")
+	timeout    time.Duration // Timeout for DNS queries (default: 5s)
+	retries    int           // Number of retry attempts (default: 3)
 }
 
-// LookupTXT returns TXT records
-func (r *WasmResolver) LookupTXT(ctx context.Context, host string) ([]string, error) {
-	resp, err := r.Lookup(ctx, host, "TXT")
-	if err != nil {
-		return nil, err
+// defaultResolverConfig returns secure defaults for DNS resolution.
+// These defaults align with constitution requirements for secure-by-default.
+func defaultResolverConfig() resolverConfig {
+	return resolverConfig{
+		nameserver: "", // Empty = use host's default resolver
+		timeout:    5 * time.Second,
+		retries:    3,
 	}
-	return resp.Records, nil
 }
 
-// LookupNS returns NS records (nameservers)
-func (r *WasmResolver) LookupNS(ctx context.Context, host string) ([]string, error) {
-	resp, err := r.Lookup(ctx, host, "NS")
-	if err != nil {
-		return nil, err
+// ResolverOption is a functional option for configuring a WasmResolver.
+// Use With* functions to create options.
+type ResolverOption func(*resolverConfig)
+
+// WithNameserver sets a custom DNS nameserver address.
+// The address should be in "host:port" format (e.g., "8.8.8.8:53").
+// If port is omitted, ":53" is assumed.
+// If not specified, the host's default resolver is used.
+func WithNameserver(ns string) ResolverOption {
+	return func(c *resolverConfig) {
+		c.nameserver = ns
 	}
-	return resp.Records, nil
+}
+
+// WithDNSTimeout sets the timeout for DNS queries.
+// Default is 5 seconds per constitution specification.
+// A zero or negative duration is ignored (uses default).
+func WithDNSTimeout(d time.Duration) ResolverOption {
+	return func(c *resolverConfig) {
+		if d > 0 {
+			c.timeout = d
+		}
+	}
+}
+
+// WithRetries sets the number of retry attempts for failed DNS queries.
+// Default is 3 retries. A negative value is ignored (uses default).
+// Setting to 0 disables retries (single attempt only).
+func WithRetries(n int) ResolverOption {
+	return func(c *resolverConfig) {
+		if n >= 0 {
+			c.retries = n
+		}
+	}
+}
+
+// NewResolver creates a new DNS resolver with the given options.
+// Without any options, secure defaults are applied:
+//   - timeout: 5 seconds
+//   - retries: 3
+//   - nameserver: host's default resolver
+//
+// Example:
+//
+//	// Use defaults
+//	resolver := NewResolver()
+//
+//	// With custom nameserver and timeout
+//	resolver := NewResolver(
+//	    WithNameserver("1.1.1.1:53"),
+//	    WithDNSTimeout(10*time.Second),
+//	)
+func NewResolver(opts ...ResolverOption) ports.DNSResolver {
+	cfg := defaultResolverConfig()
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	// Note: retries are currently ignored by the underlying WASM adapter
+	return wasm.NewDNSAdapter(cfg.nameserver, cfg.timeout)
 }
