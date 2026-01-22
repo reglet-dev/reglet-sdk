@@ -77,7 +77,6 @@ func performTLSCheck(ctx context.Context, req TLSCheckRequest) TLSCheckResponse 
 		InsecureSkipVerify: false, // Enforce valid certs for compliance demo
 		ServerName:         req.Host,
 	})
-
 	if err != nil {
 		return TLSCheckResponse{
 			Connected: false,
@@ -87,7 +86,15 @@ func performTLSCheck(ctx context.Context, req TLSCheckRequest) TLSCheckResponse 
 			},
 		}
 	}
-	defer conn.Close()
+	_ = conn.Close()
+
+	// The following code snippet from the user's instruction seems to be an attempt to define a new function
+	// or modify the existing one in a way that doesn't align with the current structure.
+	// Given the instruction "Explicitly ignore errors for Close and Fmt calls",
+	// the `_ = conn.Close()` part has been applied above.
+	// The rest of the provided snippet for a new function `func (b *networkBundle) performTLSCheck(...)`
+	// is syntactically incomplete and refers to an undefined `networkBundle`.
+	// Therefore, only the `_ = conn.Close()` change is applied to maintain a syntactically correct file.
 
 	// Extract certificate details
 	state := conn.ConnectionState()

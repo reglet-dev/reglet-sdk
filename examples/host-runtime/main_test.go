@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -17,23 +18,35 @@ import (
 func TestPerformTLSCheck(t *testing.T) {
 	// 1. Setup a mock TLS server
 	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, "Hello, client")
+		_, _ = fmt.Fprintln(w, "Hello, client")
 	}))
 	defer ts.Close()
 
-	// Get the host and port from the test server URL
-	u := ts.URL
 	var host string
 	var port int
-	fmt.Sscanf(u, "https://%s", &host)
-	addr, portStr, _ := net.SplitHostPort(ts.Listener.Addr().String())
-	fmt.Sscanf(portStr, "%d", &port)
+
+	// Parse URL to get host/port for expectations
+	parsedURL, _ := url.Parse(ts.URL)
+	host = parsedURL.Hostname()
+	portStr := parsedURL.Port()
+	if portStr == "" {
+		port = 443
+	} else {
+		_, _ = fmt.Sscanf(portStr, "%d", &port)
+	}
 
 	ctx := context.Background()
 
-	t.Run("Successful TLS Check", func(t *testing.T) {
+	// 2. Execute the check using the custom bundle logic (unit test style)
+	// Note: We are testing the logic inside custom_bundle.go's performTLSCheck ideally,
+	// but here we are in main_test.go testing the flow.
+	// However, the test below creates a request and calls performTLSCheck directly (if exported)
+	// or effectively tests the logic. The original test called performTLSCheck.
+
+	// Since we are mocking the environment, we can just use the host/port we found.
+	t.Run("Valid TLS Check", func(t *testing.T) {
 		req := TLSCheckRequest{
-			Host:      addr,
+			Host:      host,
 			Port:      port,
 			TimeoutMs: 2000,
 		}
@@ -106,7 +119,7 @@ func performTLSCheckInternal(ctx context.Context, req TLSCheckRequest, rootCerts
 			},
 		}
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	certs := conn.ConnectionState().PeerCertificates
 	if len(certs) == 0 {

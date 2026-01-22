@@ -531,7 +531,8 @@ value, ok := config.GetString(cfgMap, "optional_field")
 
 See the [examples directory](examples/) for complete working plugins:
 
-- **[basic-plugin](examples/basic-plugin/)** - HTTP endpoint checker demonstrating SDK patterns
+- **[plugin](examples/plugin/)** - A complete example plugin implementing a TLS check
+- **[host-runtime](examples/host-runtime/)** - An example host runtime demonstrating how to execute plugins using the SDK host package
 
 ## Contributing
 

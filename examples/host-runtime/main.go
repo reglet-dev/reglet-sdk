@@ -50,7 +50,7 @@ func main() {
 		slog.Error("Failed to create executor", "error", err)
 		os.Exit(1)
 	}
-	defer executor.Close(ctx)
+	defer func() { _ = executor.Close(ctx) }()
 
 	// 6. Load Plugin
 	plugin, err := executor.LoadPlugin(ctx, wasmBytes)
