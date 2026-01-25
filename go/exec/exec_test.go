@@ -190,33 +190,33 @@ func TestApplyRunOptions_OptionsApplyInOrder(t *testing.T) {
 func TestCommandRequest_Serialization(t *testing.T) {
 	tests := []struct {
 		name    string
-		request entities.ExecRequest
+		request entities.WireExecRequest
 	}{
 		{
 			name: "simple command",
-			request: entities.ExecRequest{
+			request: entities.WireExecRequest{
 				Command: "/usr/bin/whoami",
 			},
 		},
 		{
 			name: "command with args",
-			request: entities.ExecRequest{
+			request: entities.WireExecRequest{
 				Command: "/bin/echo",
 				Args:    []string{"hello", "world"},
 			},
 		},
 		{
 			name: "command with environment",
-			request: entities.ExecRequest{
+			request: entities.WireExecRequest{
 				Command: "/usr/bin/env",
 				Env:     []string{"FOO=bar", "BAZ=qux"},
 			},
 		},
 		{
 			name: "command with working directory",
-			request: entities.ExecRequest{
+			request: entities.WireExecRequest{
 				Command: "/usr/bin/ls",
-				Args:    []string{"-la"},
+				Args:    []string{" -la"},
 				Dir:     "/tmp",
 			},
 		},
@@ -227,7 +227,7 @@ func TestCommandRequest_Serialization(t *testing.T) {
 			data, err := json.Marshal(tt.request)
 			require.NoError(t, err)
 
-			var decoded entities.ExecRequest
+			var decoded entities.WireExecRequest
 			err = json.Unmarshal(data, &decoded)
 			require.NoError(t, err)
 

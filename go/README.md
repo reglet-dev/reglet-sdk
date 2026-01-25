@@ -339,24 +339,41 @@ return entities.ResultError(entities.NewErrorDetail("config", "missing required 
 
 ## Capabilities
 
-Request capabilities in `Describe()`:
+Plugins must declare their required capabilities. The recommended approach is using a `plugin.yaml` manifest file, which allows for structured and granular permission control.
 
-```go
-func (p *MyPlugin) Describe(ctx context.Context) (entities.Metadata, error) {
-    return entities.Metadata{
-        Name:    "my-plugin",
-        Version: "1.0.0",
-        Capabilities: []entities.Capability{
-            entities.NewCapability("network:outbound", "api.example.com:443"),
-            entities.NewCapability("network:dns", "*"),
-            entities.NewCapability("exec", "systemctl"),
-            entities.NewCapability("fs:read", "/etc/nginx/*.conf"),
-        },
-    }, nil
-}
+### Manifest Example (`plugin.yaml`)
+
+```yaml
+name: my-plugin
+version: 1.0.0
+capabilities:
+  network:
+    rules:
+      - hosts: ["api.example.com", "*.google.com"]
+        ports: ["443", "80-90"]
+  fs:
+    rules:
+      - read: ["/data/**"]
+        write: ["/tmp/app.log"]
+  env:
+    vars: ["AWS_REGION", "DEBUG"]
+  exec:
+    commands: ["/usr/bin/grep"]
+  kv:
+    rules:
+      - keys: ["config-*"]
+        op: "read-write"
 ```
 
-**Note**: Capabilities are granted by the host via system configuration, not by the plugin itself.
+### Capability Types
+
+- **Network**: `rules` array with `hosts` and `ports`. Wildcards (`*`) supported.
+- **FileSystem**: `rules` array with `read` and `write` paths. Recursive access via `**`.
+- **Environment**: `vars` array of permitted environment variables.
+- **Exec**: `commands` array of allowed external commands.
+- **KeyValue**: `rules` array with `keys` and `op` (`read`, `write`, or `read-write`).
+
+**Note**: Capabilities are granted by the host. The `plugin.yaml` defines what the plugin *requests*.
 
 ## Limitations
 
