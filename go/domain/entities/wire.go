@@ -100,8 +100,8 @@ type SMTPResponse struct {
 	TLS            bool         `json:"tls,omitempty"`
 }
 
-// ExecRequest is the JSON wire format for an exec request.
-type ExecRequest struct {
+// WireExecRequest is the JSON wire format for an exec request.
+type WireExecRequest struct {
 	Args    []string    `json:"args"`
 	Env     []string    `json:"env,omitempty"`
 	Command string      `json:"command"`

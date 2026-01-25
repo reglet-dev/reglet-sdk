@@ -35,17 +35,17 @@ func (c Capability) String() string {
 	return c.Category + ":" + c.Resource
 }
 
-// NetworkCapability creates a network capability.
-func NetworkCapability(resource string) Capability {
+// NetworkCapabilityLegacy creates a network capability.
+func NetworkCapabilityLegacy(resource string) Capability {
 	return NewCapability("network", resource)
 }
 
-// FileSystemCapability creates a filesystem capability.
-func FileSystemCapability(resource string) Capability {
+// FileSystemCapabilityLegacy creates a filesystem capability.
+func FileSystemCapabilityLegacy(resource string) Capability {
 	return NewCapability("fs", resource)
 }
 
-// ExecCapability creates an exec capability.
-func ExecCapability(command string) Capability {
+// ExecCapabilityLegacy creates an exec capability.
+func ExecCapabilityLegacy(command string) Capability {
 	return NewCapability("exec", command)
 }
