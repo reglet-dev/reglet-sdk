@@ -30,5 +30,6 @@ type HTTPRequest struct {
 type HTTPResponse struct {
 	Headers    map[string][]string
 	Body       []byte
+	Proto      string // e.g. "HTTP/1.1"
 	StatusCode int
 }

@@ -2,8 +2,11 @@ package sdknet
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/reglet-dev/reglet-sdk/go/application/config"
@@ -56,7 +59,9 @@ func RunHTTPCheck(ctx context.Context, cfg config.Config, opts ...HTTPCheckOptio
 	// Parse optional fields
 	method := config.GetStringDefault(cfg, "method", "GET")
 	timeoutMs := config.GetIntDefault(cfg, "timeout_ms", 30000)
+	bodyPreviewLength := config.GetIntDefault(cfg, "body_preview_length", 200)
 	expectedStatus, hasExpectedStatus := config.GetInt(cfg, "expected_status")
+	expectedBodyContains := config.GetStringDefault(cfg, "expected_body_contains", "")
 	maxRedirects := config.GetIntDefault(cfg, "max_redirects", 10)
 	// follow_redirects logic: if false, set maxRedirects to 0?
 	if followRedirects, ok := config.GetBool(cfg, "follow_redirects"); ok && !followRedirects {
@@ -118,11 +123,10 @@ func RunHTTPCheck(ctx context.Context, cfg config.Config, opts ...HTTPCheckOptio
 		return entities.ResultError(errDetail).WithMetadata(metadata), errDetail
 	}
 
-	// Build result data
 	resultData := map[string]any{
 		"status_code": resp.StatusCode,
 		"latency_ms":  latency.Milliseconds(),
-		// "body_truncated": ??? ports.HTTPResponse doesn't have BodyTruncated
+		"protocol":    resp.Proto,
 	}
 
 	if len(resp.Headers) > 0 {
@@ -130,7 +134,22 @@ func RunHTTPCheck(ctx context.Context, cfg config.Config, opts ...HTTPCheckOptio
 	}
 
 	if len(resp.Body) > 0 {
-		resultData["body"] = string(resp.Body)
+		// Calculate hash
+		hash := sha256.Sum256(resp.Body)
+		resultData["body_sha256"] = hex.EncodeToString(hash[:])
+		resultData["body_size"] = len(resp.Body)
+
+		// Create preview
+		preview := resp.Body
+		truncated := false
+		if len(preview) > bodyPreviewLength {
+			preview = preview[:bodyPreviewLength]
+			truncated = true
+		}
+		resultData["body"] = string(preview)
+		resultData["body_truncated"] = truncated
+
+		// Compatibility: keep "body_length" as alias for size? Or just use body_size
 		resultData["body_length"] = len(resp.Body)
 	}
 
@@ -140,6 +159,15 @@ func RunHTTPCheck(ctx context.Context, cfg config.Config, opts ...HTTPCheckOptio
 		resultData["expected_status"] = expectedStatus
 		resultData["actual_status"] = resp.StatusCode
 		return entities.ResultFailure(message, resultData).WithMetadata(metadata), nil
+	}
+
+	// Check expected body content if specified
+	if expectedBodyContains != "" {
+		if !strings.Contains(string(resp.Body), expectedBodyContains) {
+			message := fmt.Sprintf("HTTP body mismatch: expected to contain '%s'", expectedBodyContains)
+			resultData["expected_body_contains"] = expectedBodyContains
+			return entities.ResultFailure(message, resultData).WithMetadata(metadata), nil
+		}
 	}
 
 	// Success

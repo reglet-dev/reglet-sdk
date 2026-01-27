@@ -13,6 +13,7 @@ import (
 	"github.com/reglet-dev/reglet-sdk/go/domain/entities"
 	"github.com/reglet-dev/reglet-sdk/go/domain/ports"
 	"github.com/reglet-dev/reglet-sdk/go/internal/abi"
+	wasmcontext "github.com/reglet-dev/reglet-sdk/go/internal/wasmcontext"
 	_ "github.com/reglet-dev/reglet-sdk/go/log"
 )
 
@@ -40,16 +41,11 @@ func NewHTTPAdapter(defaultTimeout time.Duration) *HTTPAdapter {
 // Do executes an HTTP request.
 func (c *HTTPAdapter) Do(ctx context.Context, req ports.HTTPRequest) (*ports.HTTPResponse, error) {
 	// Prepare wire request
-	wireCtx := entities.ContextWire{}
+	wireCtx := wasmcontext.ContextToWire(ctx)
 
 	headers := make(map[string][]string)
 	for k, v := range req.Headers {
-		headers[k] = []string{v} // ports.HTTPRequest has map[string]string (single value?)
-		// Wait, ports.HTTPRequest defined Headers as map[string]string.
-		// Standard HTTP headers are map[string][]string.
-		// Detailed check: "Headers map[string]string" in ports/http_client.go.
-		// This simplifies it but loses multi-value headers.
-		// Assuming simple headers for now as per port definition.
+		headers[k] = []string{v}
 	}
 
 	rawBody := ""
@@ -101,6 +97,7 @@ func (c *HTTPAdapter) Do(ctx context.Context, req ports.HTTPRequest) (*ports.HTT
 		StatusCode: wireResp.StatusCode,
 		Headers:    wireResp.Headers,
 		Body:       body,
+		Proto:      wireResp.Proto,
 	}, nil
 }
 

@@ -49,6 +49,7 @@ type HTTPResponse struct {
 	Body          string              `json:"body,omitempty"`
 	StatusCode    int                 `json:"status_code"`
 	BodyTruncated bool                `json:"body_truncated,omitempty"`
+	Proto         string              `json:"proto,omitempty"`
 }
 
 // TCPRequest is the JSON wire format for a TCP connection request.
