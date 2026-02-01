@@ -90,7 +90,7 @@ func TestRunHTTPCheck_Mock_Success_GET(t *testing.T) {
 	assert.True(t, result.IsSuccess())
 	assert.Equal(t, 200, result.Data["status_code"])
 	assert.Equal(t, "OK", result.Data["body"])
-	assert.Greater(t, result.Data["latency_ms"], int64(-1))
+	assert.Greater(t, result.Data["response_time_ms"].(int64), int64(-1))
 
 	mockClient.AssertExpectations(t)
 }

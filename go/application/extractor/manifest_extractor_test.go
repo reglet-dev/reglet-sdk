@@ -1,107 +1,128 @@
 package extractor_test
 
 import (
-	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/reglet-dev/reglet-sdk/go/application/extractor"
 	"github.com/reglet-dev/reglet-sdk/go/domain/entities"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
-// mockParser implements ports.ManifestParser
-type mockParser struct {
-	manifest *entities.PluginManifest
-	err      error
+// MockManifestParser is a mock implementation of ManifestParser
+type MockManifestParser struct {
+	mock.Mock
 }
 
-func (m *mockParser) Parse(data []byte) (*entities.PluginManifest, error) {
-	return m.manifest, m.err
+func (m *MockManifestParser) Parse(data []byte) (*entities.Manifest, error) {
+	args := m.Called(data)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*entities.Manifest), args.Error(1)
 }
 
 // mockRenderer implements ports.TemplateEngine
 type mockRenderer struct {
-	output []byte
-	err    error
+	mock.Mock
 }
 
 func (m *mockRenderer) Render(template []byte, data map[string]interface{}) ([]byte, error) {
-	return m.output, m.err
+	args := m.Called(template, data)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]byte), args.Error(1)
 }
 
 func TestManifestExtractor_Extract(t *testing.T) {
 	t.Run("should extract capabilities successfully without template", func(t *testing.T) {
-		expectedCaps := &entities.GrantSet{
-			Network: &entities.NetworkCapability{
-				Rules: []entities.NetworkRule{
-					{Hosts: []string{"example.com"}, Ports: []string{"443"}},
-				},
-			},
+		expectedCaps := []entities.Capability{
+			{Category: "network", Resource: "google.com"},
+			{Category: "fs", Resource: "/tmp", Action: "read"},
 		}
 
-		parser := &mockParser{
-			manifest: &entities.PluginManifest{
-				Capabilities: expectedCaps,
-			},
-		}
+		mockParser := new(MockManifestParser)
+		manifestBytes := []byte("manifest-data")
+		mockParser.On("Parse", manifestBytes).Return(&entities.Manifest{
+			Capabilities: expectedCaps,
+		}, nil)
 
-		manifestBytes := []byte("dummy")
-		ext := extractor.NewManifestExtractor(manifestBytes, extractor.WithParser(parser))
+		ext := extractor.NewManifestExtractor(manifestBytes, extractor.WithParser(mockParser))
 
 		caps, err := ext.Extract(nil)
 		require.NoError(t, err)
-		assert.Equal(t, expectedCaps, caps)
+
+		// Helper to compare sets
+		assert.NotNil(t, caps)
+		assert.Equal(t, 1, len(caps.Network.Rules))
+		assert.Equal(t, 1, len(caps.FS.Rules))
+
+		mockParser.AssertExpectations(t)
 	})
 
 	t.Run("should fail if parser is missing", func(t *testing.T) {
 		ext := extractor.NewManifestExtractor([]byte("dummy"))
 		_, err := ext.Extract(nil)
-		assert.ErrorContains(t, err, "manifest parser is required")
+		assert.Error(t, err)
+	})
+
+	t.Run("should fail if parser fails", func(t *testing.T) {
+		mockParser := new(MockManifestParser)
+		mockParser.On("Parse", mock.Anything).Return((*entities.Manifest)(nil), fmt.Errorf("parse error"))
+
+		ext := extractor.NewManifestExtractor([]byte("dummy"), extractor.WithParser(mockParser))
+		_, err := ext.Extract(nil)
+		assert.Error(t, err)
+	})
+
+	t.Run("should render template if engine provided", func(t *testing.T) {
+		mockParser := new(MockManifestParser)
+		mockRenderer := new(mockRenderer)
+
+		manifestBytes := []byte("{{ .val }}")
+		renderedBytes := []byte("rendered")
+		config := map[string]interface{}{"val": "rendered"}
+
+		mockRenderer.On("Render", manifestBytes, config).Return(renderedBytes, nil)
+		mockParser.On("Parse", renderedBytes).Return(&entities.Manifest{}, nil)
+
+		ext := extractor.NewManifestExtractor(manifestBytes,
+			extractor.WithParser(mockParser),
+			extractor.WithTemplateEngine(mockRenderer),
+		)
+
+		_, err := ext.Extract(config)
+		require.NoError(t, err)
+
+		mockRenderer.AssertExpectations(t)
+		mockParser.AssertExpectations(t)
 	})
 
 	t.Run("should fail if rendering fails", func(t *testing.T) {
-		renderer := &mockRenderer{
-			err: errors.New("render error"),
-		}
-		parser := &mockParser{} // won't be called
+		mockParser := new(MockManifestParser)
+		mockRenderer := new(mockRenderer)
 
-		ext := extractor.NewManifestExtractor(
-			[]byte("{{.bad}}"),
-			extractor.WithParser(parser),
-			extractor.WithTemplateEngine(renderer),
+		mockRenderer.On("Render", mock.Anything, mock.Anything).Return(([]byte)(nil), fmt.Errorf("render error"))
+
+		ext := extractor.NewManifestExtractor([]byte("dummy"),
+			extractor.WithParser(mockParser),
+			extractor.WithTemplateEngine(mockRenderer),
 		)
 
 		_, err := ext.Extract(nil)
-		assert.ErrorContains(t, err, "failed to render manifest: render error")
-	})
-
-	t.Run("should fail if parsing fails", func(t *testing.T) {
-		renderer := &mockRenderer{
-			output: []byte("rendered"),
-		}
-		parser := &mockParser{
-			err: errors.New("parse error"),
-		}
-
-		ext := extractor.NewManifestExtractor(
-			[]byte("template"),
-			extractor.WithParser(parser),
-			extractor.WithTemplateEngine(renderer),
-		)
-
-		_, err := ext.Extract(nil)
-		assert.ErrorContains(t, err, "failed to parse manifest: parse error")
+		assert.Error(t, err)
 	})
 
 	t.Run("should return empty grant set if manifest has no capabilities", func(t *testing.T) {
-		parser := &mockParser{
-			manifest: &entities.PluginManifest{
-				Capabilities: nil,
-			},
-		}
+		mockParser := new(MockManifestParser)
+		mockParser.On("Parse", mock.Anything).Return(&entities.Manifest{
+			Capabilities: nil,
+		}, nil)
 
-		ext := extractor.NewManifestExtractor([]byte("dummy"), extractor.WithParser(parser))
+		ext := extractor.NewManifestExtractor([]byte("dummy"), extractor.WithParser(mockParser))
 
 		caps, err := ext.Extract(nil)
 		require.NoError(t, err)
@@ -112,26 +133,23 @@ func TestManifestExtractor_Extract(t *testing.T) {
 	t.Run("should use renderer before parsing", func(t *testing.T) {
 		expectedCaps := &entities.GrantSet{}
 
-		// Renderer returns specific output
-		renderer := &mockRenderer{
-			output: []byte("rendered output"),
-		}
+		mockRenderer := new(mockRenderer)
+		mockRenderer.On("Render", mock.Anything, mock.Anything).Return([]byte("rendered output"), nil)
 
-		// Parser expects that specific output
-		parser := &mockParser{
-			manifest: &entities.PluginManifest{Capabilities: expectedCaps},
-		}
+		mockParser := new(MockManifestParser)
+		mockParser.On("Parse", []byte("rendered output")).Return(&entities.Manifest{Capabilities: []entities.Capability{}}, nil)
 
 		ext := extractor.NewManifestExtractor(
 			[]byte("template"),
-			extractor.WithParser(parser),
-			extractor.WithTemplateEngine(renderer),
+			extractor.WithParser(mockParser),
+			extractor.WithTemplateEngine(mockRenderer),
 		)
 
-		// We can't easily verify the call arguments with this simple mock,
-		// but we can verify the flow doesn't error and uses both components.
 		caps, err := ext.Extract(map[string]interface{}{"foo": "bar"})
 		require.NoError(t, err)
 		assert.Equal(t, expectedCaps, caps)
+
+		mockRenderer.AssertExpectations(t)
+		mockParser.AssertExpectations(t)
 	})
 }

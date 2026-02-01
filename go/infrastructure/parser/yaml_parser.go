@@ -1,3 +1,4 @@
+// Package parser provides functionality for parsing plugin manifests.
 package parser
 
 import (
@@ -14,9 +15,9 @@ func NewYamlManifestParser() ports.ManifestParser {
 	return &YamlManifestParser{}
 }
 
-// Parse unmarshals YAML bytes into a PluginManifest struct.
-func (p *YamlManifestParser) Parse(data []byte) (*entities.PluginManifest, error) {
-	var manifest entities.PluginManifest
+// Parse unmarshals YAML bytes into a Manifest struct.
+func (p *YamlManifestParser) Parse(data []byte) (*entities.Manifest, error) {
+	var manifest entities.Manifest
 	if err := yaml.Unmarshal(data, &manifest); err != nil {
 		return nil, err
 	}

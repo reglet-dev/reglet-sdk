@@ -1,4 +1,4 @@
-// Package net provides high-level network check functions for SDK plugins.
+// Package sdknet provides high-level network check functions for SDK plugins.
 package sdknet
 
 import (

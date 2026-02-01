@@ -3,6 +3,7 @@
 package plugin
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -16,7 +17,7 @@ import (
 
 // Type aliases for convenience in tests
 type (
-	Metadata        = entities.Metadata
+	// Metadata        = entities.Metadata // Removed, used Manifest instead
 	Capability      = entities.Capability
 	Result          = entities.Result
 	ErrorDetail     = entities.ErrorDetail
@@ -37,15 +38,15 @@ type (
 // Function aliases
 var ToErrorDetail = errors.ToErrorDetail
 
-func TestMetadata_Capabilities(t *testing.T) {
+func TestManifest_Capabilities(t *testing.T) {
 	tests := []struct {
 		name         string
-		metadata     Metadata
+		manifest     entities.Manifest
 		capabilities []Capability
 	}{
 		{
 			name: "single capability",
-			metadata: Metadata{
+			manifest: entities.Manifest{
 				Name:    "test",
 				Version: "1.0.0",
 				Capabilities: []Capability{
@@ -58,7 +59,7 @@ func TestMetadata_Capabilities(t *testing.T) {
 		},
 		{
 			name: "multiple capabilities",
-			metadata: Metadata{
+			manifest: entities.Manifest{
 				Name:    "test",
 				Version: "1.0.0",
 				Capabilities: []Capability{
@@ -73,7 +74,7 @@ func TestMetadata_Capabilities(t *testing.T) {
 		},
 		{
 			name: "no capabilities",
-			metadata: Metadata{
+			manifest: entities.Manifest{
 				Name:         "test",
 				Version:      "1.0.0",
 				Capabilities: []Capability{},
@@ -84,20 +85,53 @@ func TestMetadata_Capabilities(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.capabilities, tt.metadata.Capabilities)
+			assert.Equal(t, tt.capabilities, tt.manifest.Capabilities)
 
 			// Test JSON serialization
-			data, err := json.Marshal(tt.metadata)
+			data, err := json.Marshal(tt.manifest)
 			require.NoError(t, err)
 
-			var decoded Metadata
+			var decoded entities.Manifest
 			err = json.Unmarshal(data, &decoded)
 			require.NoError(t, err)
-			assert.Equal(t, tt.metadata.Name, decoded.Name)
-			assert.Equal(t, tt.metadata.Version, decoded.Version)
-			assert.Equal(t, len(tt.metadata.Capabilities), len(decoded.Capabilities))
+			assert.Equal(t, tt.manifest.Name, decoded.Name)
+			assert.Equal(t, tt.manifest.Version, decoded.Version)
+			assert.Equal(t, len(tt.manifest.Capabilities), len(decoded.Capabilities))
 		})
 	}
+}
+
+// MockPlugin for testing Manifest
+type MockPlugin struct{}
+
+func (m *MockPlugin) Manifest(ctx context.Context) (*entities.Manifest, error) {
+	return &entities.Manifest{
+		Name:    "stub",
+		Version: "1.0.0",
+		Capabilities: []entities.Capability{
+			{Category: "test", Resource: "resource"},
+		},
+	}, nil
+}
+
+func (m *MockPlugin) Execute(ctx context.Context, config map[string]any) (*entities.Result, error) {
+	res := entities.ResultSuccess("mock executed", nil)
+	return &res, nil
+}
+
+func TestPluginManifest(t *testing.T) {
+	userPlugin := &MockPlugin{} // Assuming userPlugin is an instance of a plugin interface
+
+	manifest, err := userPlugin.Manifest(context.Background())
+	if err != nil {
+		t.Fatalf("Manifest failed: %v", err)
+	}
+	if manifest.Name != "stub" {
+		t.Errorf("expected name stub, got %s", manifest.Name)
+	}
+	assert.Equal(t, "1.0.0", manifest.Version)
+	assert.Equal(t, 1, len(manifest.Capabilities))
+	assert.Equal(t, "test", manifest.Capabilities[0].Category)
 }
 
 func TestResult_Serialization(t *testing.T) {

@@ -4,13 +4,13 @@ package entities
 // Capabilities follow the format "category:resource" (e.g., "network:outbound:443").
 type Capability struct {
 	// Category is the capability category (e.g., "network", "fs", "exec").
-	Category string `json:"kind"`
+	Category string `json:"kind" yaml:"kind"`
 
 	// Resource is the specific resource within the category.
-	Resource string `json:"pattern"`
+	Resource string `json:"pattern" yaml:"pattern"`
 
 	// Action is the permitted action (e.g., "read", "write", "connect").
-	Action string `json:"action,omitempty"`
+	Action string `json:"action,omitempty" yaml:"action,omitempty"`
 }
 
 // NewCapability creates a new Capability with the given category and resource.

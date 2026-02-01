@@ -165,7 +165,7 @@ func TestRunTCPCheck_WithMockDialer_Success(t *testing.T) {
 	assert.True(t, result.IsSuccess())
 	assert.Equal(t, true, result.Data["connected"])
 	assert.Equal(t, "1.2.3.4:443", result.Data["remote_addr"])
-	assert.Greater(t, result.Data["latency_ms"], int64(-1)) // Should be >= 0
+	assert.Greater(t, result.Data["response_time_ms"].(int64), int64(-1)) // Should be >= 0
 
 	mockDialer.AssertExpectations(t)
 	mockConn.AssertExpectations(t)

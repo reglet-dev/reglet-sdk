@@ -22,16 +22,6 @@ type RunMetadata struct {
 	Duration time.Duration `json:"duration_ns"`
 }
 
-// Metadata contains information about the plugin.
-type Metadata struct {
-	Name           string       `json:"name"`
-	Version        string       `json:"version"`
-	Description    string       `json:"description"`
-	SDKVersion     string       `json:"sdk_version,omitempty"`
-	MinHostVersion string       `json:"min_host_version,omitempty"`
-	Capabilities   []Capability `json:"capabilities"`
-}
-
 // NewRunMetadata creates a new RunMetadata with the given start and end times.
 func NewRunMetadata(start, end time.Time) *RunMetadata {
 	return &RunMetadata{

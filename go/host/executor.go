@@ -76,15 +76,15 @@ func (e *Executor) LoadPlugin(ctx context.Context, wasmBytes []byte) (*PluginIns
 	return &PluginInstance{module: mod}, nil
 }
 
-// Describe calls the "describe" export of the plugin.
-func (p *PluginInstance) Describe(ctx context.Context) (entities.Metadata, error) {
-	var metadata entities.Metadata
-	packed, err := p.callRaw(ctx, "describe", nil)
+// Manifest returns the plugin manifest.
+func (p *PluginInstance) Manifest(ctx context.Context) (entities.Manifest, error) {
+	var manifest entities.Manifest
+	packed, err := p.callRaw(ctx, "manifest", nil)
 	if err != nil {
-		return metadata, err
+		return manifest, err
 	}
-	err = p.unmarshalPacked(packed, &metadata)
-	return metadata, err
+	err = p.unmarshalPacked(packed, &manifest)
+	return manifest, err
 }
 
 // Schema calls the "schema" export of the plugin.

@@ -86,8 +86,8 @@ func NewLoader(opts ...LoaderOption) *Loader {
 }
 
 // LoadManifest loads, parses, and validates a plugin manifest.
-func (l *Loader) LoadManifest(raw []byte, config map[string]interface{}) (*entities.PluginManifest, error) {
-	var data = raw
+func (l *Loader) LoadManifest(raw []byte, config map[string]interface{}) (*entities.Manifest, error) {
+	data := raw
 
 	if l.config.templateEngine != nil {
 		var err error

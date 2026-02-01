@@ -20,12 +20,10 @@ import (
 
 // Plugin is the interface every Reglet plugin must implement.
 type Plugin interface {
-	// Describe returns metadata about the plugin.
-	Describe(ctx context.Context) (entities.Metadata, error)
-	// Schema returns the JSON schema for the plugin's configuration.
-	Schema(ctx context.Context) ([]byte, error)
+	// Manifest returns complete metadata about the plugin.
+	Manifest(ctx context.Context) (*entities.Manifest, error)
 	// Check executes the plugin's main logic with the given configuration.
-	Check(ctx context.Context, config map[string]any) (entities.Result, error)
+	Check(ctx context.Context, config []byte) (*entities.Result, error)
 }
 
 // Internal variable to hold the user's plugin implementation.
@@ -35,11 +33,8 @@ var userPlugin Plugin
 // Plugin authors call this in their `main()` function.
 //
 // Version Checking:
-// The SDK automatically reports its version (Version) and minimum required host
-// version (MinHostVersion) in the Describe() metadata. The host is responsible
-// for validating compatibility before loading the plugin. If the host version
-// is below MinHostVersion, the host should reject the plugin with a clear error
-// message.
+// The SDK automatically reports its version (Version) in the Manifest metadata.
+// The host is responsible for validating compatibility before loading the plugin.
 func Register(p Plugin) {
 	if userPlugin != nil {
 		slog.Warn("sdk: plugin already registered, ignoring second call", "userPlugin_addr", fmt.Sprintf("%p", &userPlugin))
@@ -52,44 +47,25 @@ func Register(p Plugin) {
 // Define the functions that will be exported to the WASM host.
 // These functions perform panic recovery and ABI translation.
 
-//go:wasmexport describe
-func _describe() uint64 {
+//go:wasmexport _manifest
+func _manifest() uint64 {
 	return handleExportedCall(func() (interface{}, error) {
 		if userPlugin == nil {
 			return nil, fmt.Errorf("plugin not registered")
 		}
 		// Use current context or create one with timeout
 		ctx := wasmcontext.GetCurrentContext()
-		metadata, err := userPlugin.Describe(ctx)
+		manifest, err := userPlugin.Manifest(ctx)
 		if err != nil {
 			return nil, err
 		}
-		// Auto-populate SDK version for metadata
-		metadata.SDKVersion = Version
-		metadata.MinHostVersion = MinHostVersion
-		return metadata, nil
+		// Auto-populate SDK version for manifest
+		manifest.SDKVersion = Version
+		return manifest, nil
 	})
 }
 
-//go:wasmexport schema
-func _schema() uint64 {
-	return handleExportedCall(func() (interface{}, error) {
-		slog.Debug("sdk: _schema called", "userPlugin_addr", fmt.Sprintf("%p", &userPlugin), "userPlugin_nil", userPlugin == nil)
-		if userPlugin == nil {
-			return nil, fmt.Errorf("plugin not registered")
-		}
-		// Use current context or create one with timeout
-		ctx := wasmcontext.GetCurrentContext()
-		schemaBytes, err := userPlugin.Schema(ctx)
-		if err != nil {
-			return nil, err
-		}
-		// Schema is raw JSON bytes, so return as is
-		return schemaBytes, nil
-	})
-}
-
-//go:wasmexport observe
+//go:wasmexport _observe
 func _observe(configPtr uint32, configLen uint32) uint64 {
 	return handleExportedCall(func() (interface{}, error) {
 		slog.Debug("sdk: _observe called", "userPlugin_addr", fmt.Sprintf("%p", &userPlugin), "userPlugin_nil", userPlugin == nil)
@@ -99,10 +75,6 @@ func _observe(configPtr uint32, configLen uint32) uint64 {
 
 		// Read config from WASM memory
 		configBytes := abi.BytesFromPtr(abi.PackPtrLen(configPtr, configLen))
-		var config map[string]any
-		if err := json.Unmarshal(configBytes, &config); err != nil {
-			return nil, fmt.Errorf("failed to parse config: %w", err)
-		}
 
 		// Use current context or create one with timeout
 		ctx := wasmcontext.GetCurrentContext()
@@ -111,11 +83,13 @@ func _observe(configPtr uint32, configLen uint32) uint64 {
 		wasmcontext.SetCurrentContext(ctx)
 		defer wasmcontext.ResetContext() // Reset after execution
 
-		evidence, err := userPlugin.Check(ctx, config)
+		// Pass raw bytes to Check
+		evidence, err := userPlugin.Check(ctx, configBytes)
 		if err != nil {
 			// If user's check returns an error, create a Failure Evidence from it.
 			// This ensures all returned values are of type Evidence.
-			evidence = entities.ResultFailure(err.Error(), nil)
+			failResult := entities.ResultFailure(err.Error(), nil)
+			evidence = &failResult
 		}
 
 		// Ensure Timestamp is always set, even if plugin didn't explicitly set it.
@@ -155,7 +129,7 @@ func handleExportedCall(f func() (interface{}, error)) (packedResult uint64) {
 
 	var dataToMarshal []byte
 	switch v := result.(type) {
-	case []byte: // For Schema() returning raw JSON bytes
+	case []byte: // For returning raw JSON bytes if needed
 		dataToMarshal = v
 	default:
 		var marshalErr error

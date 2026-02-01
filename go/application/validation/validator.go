@@ -1,3 +1,4 @@
+// Package validation provides validation logic for plugin manifests and capabilities.
 package validation
 
 import (
@@ -26,7 +27,7 @@ func NewCapabilityValidator(registry ports.CapabilityRegistry) ports.CapabilityV
 }
 
 // Validate checks the manifest capabilities against registered schemas.
-func (v *CapabilityValidator) Validate(manifest *entities.PluginManifest) (*entities.ValidationResult, error) {
+func (v *CapabilityValidator) Validate(manifest *entities.Manifest) (*entities.ValidationResult, error) {
 	result := &entities.ValidationResult{Valid: true}
 
 	if manifest.Capabilities == nil {
@@ -96,20 +97,32 @@ func (v *CapabilityValidator) Validate(manifest *entities.PluginManifest) (*enti
 		}
 	}
 
-	if manifest.Capabilities.Network != nil {
-		validateCap("network", manifest.Capabilities.Network)
-	}
-	if manifest.Capabilities.FS != nil {
-		validateCap("fs", manifest.Capabilities.FS)
-	}
-	if manifest.Capabilities.Env != nil {
-		validateCap("env", manifest.Capabilities.Env)
-	}
-	if manifest.Capabilities.Exec != nil {
-		validateCap("exec", manifest.Capabilities.Exec)
-	}
-	if manifest.Capabilities.KV != nil {
-		validateCap("kv", manifest.Capabilities.KV)
+	// Check for duplicates and validate each capability in the slice
+	seen := make(map[string]bool)
+	for _, cap := range manifest.Capabilities {
+		// Validate capability structure (e.g., Category must not be empty)
+		if cap.Category == "" {
+			result.Valid = false
+			result.Errors = append(result.Errors, entities.ValidationError{
+				Field:   "capabilities",
+				Message: "capability missing category",
+			})
+			continue
+		}
+
+		key := cap.String() // Assuming entities.Capability has a String() method for uniqueness
+		if seen[key] {
+			result.Valid = false
+			result.Errors = append(result.Errors, entities.ValidationError{
+				Field:   "capabilities",
+				Message: fmt.Sprintf("duplicate capability: %s", key),
+			})
+			continue // Continue to check other capabilities
+		}
+		seen[key] = true
+
+		// Validate against schema using the helper function
+		validateCap(cap.Category, cap)
 	}
 
 	if len(result.Errors) > 0 {
