@@ -148,6 +148,8 @@ func (g *GrantSet) Clone() *GrantSet {
 
 // Difference returns capabilities in g that are not covered by other.
 // Useful for determining what capabilities still need to be granted.
+// Difference returns capabilities in g that are not covered by other.
+// Useful for determining what capabilities still need to be granted.
 func (g *GrantSet) Difference(other *GrantSet) *GrantSet {
 	if g == nil {
 		return nil
@@ -158,67 +160,93 @@ func (g *GrantSet) Difference(other *GrantSet) *GrantSet {
 
 	result := &GrantSet{}
 
-	// Network difference
-	if g.Network != nil {
-		for _, rule := range g.Network.Rules {
-			if !other.containsNetworkRule(rule) {
-				if result.Network == nil {
-					result.Network = &NetworkCapability{}
-				}
-				result.Network.Rules = append(result.Network.Rules, rule)
-			}
-		}
-	}
-
-	// FS difference
-	if g.FS != nil {
-		for _, rule := range g.FS.Rules {
-			if !other.containsFSRule(rule) {
-				if result.FS == nil {
-					result.FS = &FileSystemCapability{}
-				}
-				result.FS.Rules = append(result.FS.Rules, rule)
-			}
-		}
-	}
-
-	// Env difference
-	if g.Env != nil {
-		for _, v := range g.Env.Variables {
-			if !other.containsEnvVar(v) {
-				if result.Env == nil {
-					result.Env = &EnvironmentCapability{}
-				}
-				result.Env.Variables = append(result.Env.Variables, v)
-			}
-		}
-	}
-
-	// Exec difference
-	if g.Exec != nil {
-		for _, cmd := range g.Exec.Commands {
-			if !other.containsExecCmd(cmd) {
-				if result.Exec == nil {
-					result.Exec = &ExecCapability{}
-				}
-				result.Exec.Commands = append(result.Exec.Commands, cmd)
-			}
-		}
-	}
-
-	// KV difference
-	if g.KV != nil {
-		for _, rule := range g.KV.Rules {
-			if !other.containsKVRule(rule) {
-				if result.KV == nil {
-					result.KV = &KeyValueCapability{}
-				}
-				result.KV.Rules = append(result.KV.Rules, rule)
-			}
-		}
-	}
+	result.Network = g.diffNetwork(other)
+	result.FS = g.diffFS(other)
+	result.Env = g.diffEnv(other)
+	result.Exec = g.diffExec(other)
+	result.KV = g.diffKV(other)
 
 	return result
+}
+
+func (g *GrantSet) diffNetwork(other *GrantSet) *NetworkCapability {
+	if g.Network == nil {
+		return nil
+	}
+	var rules []NetworkRule
+	for _, rule := range g.Network.Rules {
+		if !other.containsNetworkRule(rule) {
+			rules = append(rules, rule)
+		}
+	}
+	if len(rules) == 0 {
+		return nil
+	}
+	return &NetworkCapability{Rules: rules}
+}
+
+func (g *GrantSet) diffFS(other *GrantSet) *FileSystemCapability {
+	if g.FS == nil {
+		return nil
+	}
+	var rules []FileSystemRule
+	for _, rule := range g.FS.Rules {
+		if !other.containsFSRule(rule) {
+			rules = append(rules, rule)
+		}
+	}
+	if len(rules) == 0 {
+		return nil
+	}
+	return &FileSystemCapability{Rules: rules}
+}
+
+func (g *GrantSet) diffEnv(other *GrantSet) *EnvironmentCapability {
+	if g.Env == nil {
+		return nil
+	}
+	var vars []string
+	for _, v := range g.Env.Variables {
+		if !other.containsEnvVar(v) {
+			vars = append(vars, v)
+		}
+	}
+	if len(vars) == 0 {
+		return nil
+	}
+	return &EnvironmentCapability{Variables: vars}
+}
+
+func (g *GrantSet) diffExec(other *GrantSet) *ExecCapability {
+	if g.Exec == nil {
+		return nil
+	}
+	var cmds []string
+	for _, cmd := range g.Exec.Commands {
+		if !other.containsExecCmd(cmd) {
+			cmds = append(cmds, cmd)
+		}
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return &ExecCapability{Commands: cmds}
+}
+
+func (g *GrantSet) diffKV(other *GrantSet) *KeyValueCapability {
+	if g.KV == nil {
+		return nil
+	}
+	var rules []KeyValueRule
+	for _, rule := range g.KV.Rules {
+		if !other.containsKVRule(rule) {
+			rules = append(rules, rule)
+		}
+	}
+	if len(rules) == 0 {
+		return nil
+	}
+	return &KeyValueCapability{Rules: rules}
 }
 
 // Contains returns true if g covers all capabilities in other.

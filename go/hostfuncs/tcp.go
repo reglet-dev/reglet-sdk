@@ -113,6 +113,8 @@ func WithTCPSSRFProtection(allowPrivate bool) TCPOption {
 //	func handleTCPConnect(req hostfuncs.TCPConnectRequest) hostfuncs.TCPConnectResponse {
 //	    return hostfuncs.PerformTCPConnect(ctx, req)
 //	}
+//
+// PerformTCPConnect tests TCP connectivity to the specified host and port.
 func PerformTCPConnect(ctx context.Context, req TCPConnectRequest, opts ...TCPOption) TCPConnectResponse {
 	cfg := defaultTCPConfig()
 	for _, opt := range opts {
@@ -125,128 +127,127 @@ func PerformTCPConnect(ctx context.Context, req TCPConnectRequest, opts ...TCPOp
 	}
 
 	// Validate request
-	if req.Host == "" {
-		return TCPConnectResponse{
-			Connected: false,
-			Error: &TCPError{
-				Code:    "INVALID_REQUEST",
-				Message: "host is required",
-			},
-		}
-	}
-	if req.Port <= 0 || req.Port > 65535 {
-		return TCPConnectResponse{
-			Connected: false,
-			Error: &TCPError{
-				Code:    "INVALID_REQUEST",
-				Message: fmt.Sprintf("invalid port: %d", req.Port),
-			},
-		}
+	if err := validateTCPRequest(req); err != nil {
+		return TCPConnectResponse{Connected: false, Error: err}
 	}
 
-	// SSRF Protection: validate and resolve address
+	// SSRF Protection
 	originalHost := req.Host
 	if cfg.ssrfProtection {
-		addr := fmt.Sprintf("%s:%d", req.Host, req.Port)
-		var opts []NetfilterOption
-		if cfg.allowPrivate {
-			opts = append(opts, WithBlockPrivate(false), WithBlockLocalhost(false))
+		resolvedIP, err := resolveAndValidateTCP(req, cfg)
+		if err != nil {
+			return TCPConnectResponse{Connected: false, Error: err}
 		}
-		result := ValidateAddress(addr, opts...)
-
-		if !result.Allowed {
-			return TCPConnectResponse{
-				Connected: false,
-				Error: &TCPError{
-					Code:    "SSRF_BLOCKED",
-					Message: result.Reason,
-				},
-			}
-		}
-
-		// Use resolved IP for connection to prevent DNS rebinding
-		if result.ResolvedIP != "" {
-			req.Host = result.ResolvedIP
+		if resolvedIP != "" {
+			req.Host = resolvedIP
 		}
 	}
-
-	// Build address
-	address := fmt.Sprintf("%s:%d", req.Host, req.Port)
-
-	// Apply timeout to context
-	ctx, cancel := context.WithTimeout(ctx, cfg.timeout)
-	defer cancel()
 
 	// Attempt connection
 	start := time.Now()
-	dialer := &net.Dialer{
-		Timeout: cfg.timeout,
-	}
-
-	var conn net.Conn
-	var err error
-
-	if req.UseTLS {
-		// Prepare TLS config
-		tlsConfig := req.TLSConfig
-		if tlsConfig == nil {
-			// Use original hostname for SNI, not resolved IP
-			serverName := req.Host
-			if originalHost != "" && originalHost != req.Host {
-				serverName = originalHost
-			}
-			tlsConfig = &tls.Config{
-				ServerName: serverName,
-				MinVersion: tls.VersionTLS12,
-			}
-		} else if tlsConfig.ServerName == "" {
-			// Ensure ServerName is set for SNI if not provided
-			// Use original hostname for SNI, not resolved IP
-			serverName := req.Host
-			if originalHost != "" && originalHost != req.Host {
-				serverName = originalHost
-			}
-			tlsConfig.ServerName = serverName
-		}
-
-		conn, err = tls.DialWithDialer(dialer, "tcp", address, tlsConfig)
-	} else {
-		conn, err = dialer.DialContext(ctx, "tcp", address)
-	}
-
+	conn, err := connectTCP(ctx, req, cfg, originalHost)
 	latency := time.Since(start)
 
 	if err != nil {
-		code := "CONNECTION_FAILED"
-		switch {
-		case strings.Contains(err.Error(), "timeout"), ctx.Err() == context.DeadlineExceeded:
-			code = "TIMEOUT"
-		case strings.Contains(err.Error(), "refused"):
-			code = "CONNECTION_REFUSED"
-		case strings.Contains(err.Error(), "no such host"):
-			code = "HOST_NOT_FOUND"
-		case strings.Contains(err.Error(), "certificate"):
-			code = "TLS_ERROR"
-		}
-
-		return TCPConnectResponse{
-			Connected: false,
-			LatencyMs: latency.Milliseconds(),
-			Error: &TCPError{
-				Code:    code,
-				Message: err.Error(),
-			},
-		}
+		return handleTCPError(err, ctx, latency)
 	}
 	defer func() { _ = conn.Close() }()
 
+	return createTCPResponse(conn, latency)
+}
+
+func validateTCPRequest(req TCPConnectRequest) *TCPError {
+	if req.Host == "" {
+		return &TCPError{Code: "INVALID_REQUEST", Message: "host is required"}
+	}
+	if req.Port <= 0 || req.Port > 65535 {
+		return &TCPError{Code: "INVALID_REQUEST", Message: fmt.Sprintf("invalid port: %d", req.Port)}
+	}
+	return nil
+}
+
+func resolveAndValidateTCP(req TCPConnectRequest, cfg tcpConfig) (string, *TCPError) {
+	addr := fmt.Sprintf("%s:%d", req.Host, req.Port)
+	var opts []NetfilterOption
+	if cfg.allowPrivate {
+		opts = append(opts, WithBlockPrivate(false), WithBlockLocalhost(false))
+	}
+	result := ValidateAddress(addr, opts...)
+
+	if !result.Allowed {
+		return "", &TCPError{Code: "SSRF_BLOCKED", Message: result.Reason}
+	}
+
+	return result.ResolvedIP, nil
+}
+
+func connectTCP(ctx context.Context, req TCPConnectRequest, cfg tcpConfig, originalHost string) (net.Conn, error) {
+	address := fmt.Sprintf("%s:%d", req.Host, req.Port)
+	ctx, cancel := context.WithTimeout(ctx, cfg.timeout)
+	defer cancel()
+
+	dialer := &net.Dialer{Timeout: cfg.timeout}
+
+	if req.UseTLS {
+		tlsConfig := getTLSConfig(req, originalHost)
+		return tls.DialWithDialer(dialer, "tcp", address, tlsConfig)
+	}
+	return dialer.DialContext(ctx, "tcp", address)
+}
+
+func getTLSConfig(req TCPConnectRequest, originalHost string) *tls.Config {
+	tlsConfig := req.TLSConfig
+	if tlsConfig == nil {
+		serverName := req.Host
+		if originalHost != "" && originalHost != req.Host {
+			serverName = originalHost
+		}
+		return &tls.Config{
+			ServerName: serverName,
+			MinVersion: tls.VersionTLS12,
+		}
+	}
+	if tlsConfig.ServerName == "" {
+		serverName := req.Host
+		if originalHost != "" && originalHost != req.Host {
+			serverName = originalHost
+		}
+		tlsConfig.ServerName = serverName
+	}
+	return tlsConfig
+}
+
+func handleTCPError(err error, ctx context.Context, latency time.Duration) TCPConnectResponse {
+	code := "CONNECTION_FAILED"
+	switch {
+	case strings.Contains(err.Error(), "timeout"), ctx.Err() == context.DeadlineExceeded:
+		code = "TIMEOUT"
+	case strings.Contains(err.Error(), "refused"):
+		code = "CONNECTION_REFUSED"
+	case strings.Contains(err.Error(), "no such host"):
+		code = "HOST_NOT_FOUND"
+	case strings.Contains(err.Error(), "certificate"):
+		code = "TLS_ERROR"
+	}
+
+	return TCPConnectResponse{
+		Connected: false,
+		LatencyMs: latency.Milliseconds(),
+		Error: &TCPError{
+			Code:    code,
+			Message: err.Error(),
+		},
+	}
+}
+
+func createTCPResponse(conn net.Conn, latency time.Duration) TCPConnectResponse {
 	resp := TCPConnectResponse{
 		Connected:  true,
 		RemoteAddr: conn.RemoteAddr().String(),
 		LatencyMs:  latency.Milliseconds(),
 	}
 
-	// Extract TLS info if applicable
+	// Extract TLS info
 	if tlsConn, ok := conn.(*tls.Conn); ok {
 		state := tlsConn.ConnectionState()
 		resp.TLSVersion = tlsVersionString(state.Version)

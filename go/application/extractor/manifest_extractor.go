@@ -66,51 +66,53 @@ func (e *ManifestExtractor) Extract(config map[string]interface{}) (*entities.Gr
 		return &entities.GrantSet{}, nil
 	}
 
-	// TODO: look into this code
-	// Convert []Capability to *GrantSet
-	gs := &entities.GrantSet{}
-	for _, cap := range manifest.Capabilities {
-		switch cap.Category {
-		case "network", "http": // Handle http as network for now
-			// Simple parsing: resource as host. If host:port, split.
-			host := cap.Resource
-			port := "*" // default
-			// This is a naive implementation, real parsing should be more robust
-			// or delegate to specific parser.
-			if gs.Network == nil {
-				gs.Network = &entities.NetworkCapability{}
-			}
-			gs.Network.Rules = append(gs.Network.Rules, entities.NetworkRule{
-				Hosts: []string{host},
-				Ports: []string{port},
-			})
-		case "fs":
-			if gs.FS == nil {
-				gs.FS = &entities.FileSystemCapability{}
-			}
-			read := []string{}
-			write := []string{}
-			if cap.Action == "write" {
-				write = append(write, cap.Resource)
-			} else {
-				read = append(read, cap.Resource)
-			}
-			gs.FS.Rules = append(gs.FS.Rules, entities.FileSystemRule{
-				Read:  read,
-				Write: write,
-			})
-		case "exec":
-			if gs.Exec == nil {
-				gs.Exec = &entities.ExecCapability{}
-			}
-			gs.Exec.Commands = append(gs.Exec.Commands, cap.Resource)
-		case "env":
-			if gs.Env == nil {
-				gs.Env = &entities.EnvironmentCapability{}
-			}
-			gs.Env.Variables = append(gs.Env.Variables, cap.Resource)
-		}
-	}
+	return e.convertCapabilities(manifest.Capabilities), nil
+}
 
-	return gs, nil
+func (e *ManifestExtractor) convertCapabilities(caps []entities.Capability) *entities.GrantSet {
+	gs := &entities.GrantSet{}
+	for _, cap := range caps {
+		e.convertCapability(gs, cap)
+	}
+	return gs
+}
+
+func (e *ManifestExtractor) convertCapability(gs *entities.GrantSet, capability entities.Capability) {
+	switch capability.Category {
+	case "network", "http": // Handle http as network for now
+		host := capability.Resource
+		port := "*"
+		if gs.Network == nil {
+			gs.Network = &entities.NetworkCapability{}
+		}
+		gs.Network.Rules = append(gs.Network.Rules, entities.NetworkRule{
+			Hosts: []string{host},
+			Ports: []string{port},
+		})
+	case "fs":
+		if gs.FS == nil {
+			gs.FS = &entities.FileSystemCapability{}
+		}
+		read := []string{}
+		write := []string{}
+		if capability.Action == "write" {
+			write = append(write, capability.Resource)
+		} else {
+			read = append(read, capability.Resource)
+		}
+		gs.FS.Rules = append(gs.FS.Rules, entities.FileSystemRule{
+			Read:  read,
+			Write: write,
+		})
+	case "exec":
+		if gs.Exec == nil {
+			gs.Exec = &entities.ExecCapability{}
+		}
+		gs.Exec.Commands = append(gs.Exec.Commands, capability.Resource)
+	case "env":
+		if gs.Env == nil {
+			gs.Env = &entities.EnvironmentCapability{}
+		}
+		gs.Env.Variables = append(gs.Env.Variables, capability.Resource)
+	}
 }

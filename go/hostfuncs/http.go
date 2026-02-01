@@ -44,20 +44,20 @@ type HTTPResponse struct {
 	// Error contains error information if the request failed.
 	Error *HTTPError `json:"error,omitempty"`
 
+	// Proto is the protocol version (e.g. "HTTP/1.1").
+	Proto string `json:"proto,omitempty"`
+
 	// Body is the response body.
 	Body []byte `json:"body,omitempty"`
-
-	// StatusCode is the HTTP status code.
-	StatusCode int `json:"status_code"`
 
 	// LatencyMs is the request latency in milliseconds.
 	LatencyMs int64 `json:"latency_ms,omitempty"`
 
+	// StatusCode is the HTTP status code.
+	StatusCode int `json:"status_code"`
+
 	// BodyTruncated indicates if the body was truncated due to size limits.
 	BodyTruncated bool `json:"body_truncated,omitempty"`
-
-	// Proto is the protocol version (e.g. "HTTP/1.1").
-	Proto string `json:"proto,omitempty"`
 }
 
 // HTTPError represents an HTTP request error.

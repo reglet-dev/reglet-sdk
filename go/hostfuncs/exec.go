@@ -238,10 +238,9 @@ func PerformExecCommand(ctx context.Context, req ExecCommandRequest, opts ...Exe
 // Use this for executing commands from untrusted sources (e.g., WASM plugins).
 func PerformSecureExecCommand(ctx context.Context, req ExecCommandRequest, pluginName string, capGetter CapabilityGetter, opts ...ExecOption) ExecCommandResponse {
 	// Prepend security options before user options
-	securityOpts := []ExecOption{
-		WithEnvSanitization(pluginName, capGetter),
-		WithIsolatedEnv(),
-	}
-	allOpts := append(securityOpts, opts...)
+	allOpts := make([]ExecOption, 0, len(opts)+2)
+	allOpts = append(allOpts, WithEnvSanitization(pluginName, capGetter))
+	allOpts = append(allOpts, WithIsolatedEnv())
+	allOpts = append(allOpts, opts...)
 	return PerformExecCommand(ctx, req, allOpts...)
 }

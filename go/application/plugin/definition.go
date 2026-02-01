@@ -19,24 +19,24 @@ type PluginDef struct {
 
 // PluginDefinition holds the parsed plugin definition and registered services.
 type PluginDefinition struct {
+	services     map[string]*serviceEntry
 	def          PluginDef
 	configSchema json.RawMessage
-	services     map[string]*serviceEntry
 	mu           sync.RWMutex
 }
 
 // serviceEntry holds a registered service.
 type serviceEntry struct {
+	operations  map[string]*operationEntry
 	name        string
 	description string
-	operations  map[string]*operationEntry
 }
 
 // operationEntry holds a registered operation.
 type operationEntry struct {
+	handler     HandlerFunc
 	name        string
 	description string
-	handler     HandlerFunc
 }
 
 // DefinePlugin creates a new plugin definition.

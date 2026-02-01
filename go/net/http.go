@@ -49,26 +49,96 @@ func WithHTTPClient(c ports.HTTPClient) HTTPCheckOption {
 //   - Status: "success" if request succeeded and matches expectations, "failure" if status mismatch, "error" if request failed
 //   - Data: map containing "status_code", "headers", "body", "latency_ms", "body_truncated"
 //   - Error: structured error details if request failed
+//
+// RunHTTPCheck performs an HTTP request check.
+// It parses configuration, executes the HTTP request, and returns a structured Result.
 func RunHTTPCheck(ctx context.Context, cfg config.Config, opts ...HTTPCheckOption) (entities.Result, error) {
-	// Parse required fields
-	url, err := config.MustGetString(cfg, "url")
+	parsedCfg, err := parseHTTPCheckConfig(cfg)
 	if err != nil {
 		return entities.ResultError(entities.NewErrorDetail("config", err.Error()).WithCode("MISSING_URL")), nil
 	}
 
-	// Parse optional fields
-	method := config.GetStringDefault(cfg, "method", "GET")
-	timeoutMs := config.GetIntDefault(cfg, "timeout_ms", 30000)
-	bodyPreviewLength := config.GetIntDefault(cfg, "body_preview_length", 200)
-	expectedStatus, hasExpectedStatus := config.GetInt(cfg, "expected_status")
-	expectedBodyContains := config.GetStringDefault(cfg, "expected_body_contains", "")
-	maxRedirects := config.GetIntDefault(cfg, "max_redirects", 10)
-	// follow_redirects logic: if false, set maxRedirects to 0?
-	if followRedirects, ok := config.GetBool(cfg, "follow_redirects"); ok && !followRedirects {
-		maxRedirects = 0
+	// Configure check dependencies
+	checkCfg := httpCheckConfig{}
+	for _, opt := range opts {
+		opt(&checkCfg)
 	}
 
-	// Parse headers if provided
+	// If client not injected, create default using config
+	if checkCfg.client == nil {
+		transportOpts := []TransportOption{
+			WithHTTPTimeout(time.Duration(parsedCfg.TimeoutMs) * time.Millisecond),
+			WithMaxRedirects(parsedCfg.MaxRedirects),
+		}
+		checkCfg.client = NewTransport(transportOpts...)
+	}
+
+	// Execute HTTP request
+	start := time.Now()
+	resp, err := checkCfg.client.Do(ctx, parsedCfg.Request)
+	latency := time.Since(start)
+
+	// Create metadata
+	metadata := entities.NewRunMetadata(start, time.Now())
+
+	if err != nil {
+		errDetail := entities.NewErrorDetail("network", err.Error()).WithCode("REQUEST_FAILED")
+		return entities.ResultError(errDetail).WithMetadata(metadata), errDetail
+	}
+
+	return buildHTTPResult(resp, latency, parsedCfg, metadata), nil
+}
+
+type parsedHTTPConfig struct {
+	ExpectedBodyContains string
+	Request              ports.HTTPRequest
+	TimeoutMs            int
+	BodyPreviewLength    int
+	ExpectedStatus       int
+	MaxRedirects         int
+	HasExpectedStatus    bool
+}
+
+func parseHTTPCheckConfig(cfg config.Config) (*parsedHTTPConfig, error) {
+	url, err := config.MustGetString(cfg, "url")
+	if err != nil {
+		return nil, err
+	}
+
+	pc := &parsedHTTPConfig{
+		TimeoutMs:            config.GetIntDefault(cfg, "timeout_ms", 30000),
+		BodyPreviewLength:    config.GetIntDefault(cfg, "body_preview_length", 200),
+		ExpectedBodyContains: config.GetStringDefault(cfg, "expected_body_contains", ""),
+		MaxRedirects:         config.GetIntDefault(cfg, "max_redirects", 10),
+	}
+
+	if es, ok := config.GetInt(cfg, "expected_status"); ok {
+		pc.ExpectedStatus = es
+		pc.HasExpectedStatus = true
+	}
+
+	if followRedirects, ok := config.GetBool(cfg, "follow_redirects"); ok && !followRedirects {
+		pc.MaxRedirects = 0
+	}
+
+	// Parse headers
+	headers := parseHeaders(cfg)
+	body := config.GetStringDefault(cfg, "body", "")
+
+	pc.Request = ports.HTTPRequest{
+		Method:  config.GetStringDefault(cfg, "method", "GET"),
+		URL:     url,
+		Headers: headers,
+		Timeout: pc.TimeoutMs,
+	}
+	if body != "" {
+		pc.Request.Body = []byte(body)
+	}
+
+	return pc, nil
+}
+
+func parseHeaders(cfg config.Config) map[string]string {
 	var headers map[string]string
 	if headersRaw, ok := cfg["headers"].(map[string]interface{}); ok {
 		headers = make(map[string]string)
@@ -78,51 +148,10 @@ func RunHTTPCheck(ctx context.Context, cfg config.Config, opts ...HTTPCheckOptio
 			}
 		}
 	}
+	return headers
+}
 
-	// Parse body if provided
-	body := config.GetStringDefault(cfg, "body", "")
-
-	// Configure check
-	checkCfg := httpCheckConfig{}
-	for _, opt := range opts {
-		opt(&checkCfg)
-	}
-
-	// If client not injected, create default using config
-	if checkCfg.client == nil {
-		transportOpts := []TransportOption{
-			WithHTTPTimeout(time.Duration(timeoutMs) * time.Millisecond),
-			WithMaxRedirects(maxRedirects),
-		}
-		checkCfg.client = NewTransport(transportOpts...)
-	}
-
-	// Create request
-	req := ports.HTTPRequest{
-		Method:  method,
-		URL:     url,
-		Headers: headers,
-		Timeout: timeoutMs,
-	}
-
-	if body != "" {
-		req.Body = []byte(body)
-	}
-
-	// Execute HTTP request
-	start := time.Now()
-	resp, err := checkCfg.client.Do(ctx, req)
-	latency := time.Since(start)
-
-	// Create metadata
-	metadata := entities.NewRunMetadata(start, time.Now())
-
-	if err != nil {
-		// Request failed
-		errDetail := entities.NewErrorDetail("network", err.Error()).WithCode("REQUEST_FAILED")
-		return entities.ResultError(errDetail).WithMetadata(metadata), errDetail
-	}
-
+func buildHTTPResult(resp *ports.HTTPResponse, latency time.Duration, cfg *parsedHTTPConfig, metadata *entities.RunMetadata) entities.Result {
 	resultData := map[string]any{
 		"status_code":      resp.StatusCode,
 		"response_time_ms": latency.Milliseconds(),
@@ -134,47 +163,43 @@ func RunHTTPCheck(ctx context.Context, cfg config.Config, opts ...HTTPCheckOptio
 	}
 
 	if len(resp.Body) > 0 {
-		// Calculate hash
-		hash := sha256.Sum256(resp.Body)
-		resultData["body_sha256"] = hex.EncodeToString(hash[:])
-		resultData["body_size"] = len(resp.Body)
-
-		// Create preview
-		preview := resp.Body
-		truncated := false
-		// Check truncation only if limit is positive
-		// A negative value for bodyPreviewLength indicates "unlimited", so the full body is preserved.
-		if bodyPreviewLength >= 0 && len(preview) > bodyPreviewLength {
-			preview = preview[:bodyPreviewLength]
-			truncated = true
-		}
-		resultData["body"] = string(preview)
-		resultData["body_truncated"] = truncated
-
-		// Compatibility: keep "body_length" as alias for size? Or just use body_size
-		resultData["body_length"] = len(resp.Body)
+		addBodyInfo(resultData, resp.Body, cfg.BodyPreviewLength)
 	}
 
-	// Check expected status if specified
-	if hasExpectedStatus && resp.StatusCode != expectedStatus {
-		message := fmt.Sprintf("HTTP status mismatch: expected %d, got %d", expectedStatus, resp.StatusCode)
-		resultData["expected_status"] = expectedStatus
+	// Validations
+	if cfg.HasExpectedStatus && resp.StatusCode != cfg.ExpectedStatus {
+		message := fmt.Sprintf("HTTP status mismatch: expected %d, got %d", cfg.ExpectedStatus, resp.StatusCode)
+		resultData["expected_status"] = cfg.ExpectedStatus
 		resultData["actual_status"] = resp.StatusCode
-		return entities.ResultFailure(message, resultData).WithMetadata(metadata), nil
+		return entities.ResultFailure(message, resultData).WithMetadata(metadata)
 	}
 
-	// Check expected body content if specified
-	if expectedBodyContains != "" {
-		if !strings.Contains(string(resp.Body), expectedBodyContains) {
-			message := fmt.Sprintf("HTTP body mismatch: expected to contain '%s'", expectedBodyContains)
-			resultData["expected_body_contains"] = expectedBodyContains
-			return entities.ResultFailure(message, resultData).WithMetadata(metadata), nil
+	if cfg.ExpectedBodyContains != "" {
+		if !strings.Contains(string(resp.Body), cfg.ExpectedBodyContains) {
+			message := fmt.Sprintf("HTTP body mismatch: expected to contain '%s'", cfg.ExpectedBodyContains)
+			resultData["expected_body_contains"] = cfg.ExpectedBodyContains
+			return entities.ResultFailure(message, resultData).WithMetadata(metadata)
 		}
 	}
 
-	// Success
-	message := fmt.Sprintf("HTTP %s request successful: %d", method, resp.StatusCode)
-	return entities.ResultSuccess(message, resultData).WithMetadata(metadata), nil
+	message := fmt.Sprintf("HTTP %s request successful: %d", cfg.Request.Method, resp.StatusCode)
+	return entities.ResultSuccess(message, resultData).WithMetadata(metadata)
+}
+
+func addBodyInfo(data map[string]any, body []byte, previewLen int) {
+	hash := sha256.Sum256(body)
+	data["body_sha256"] = hex.EncodeToString(hash[:])
+	data["body_size"] = len(body)
+	data["body_length"] = len(body) // Compat alias
+
+	preview := body
+	truncated := false
+	if previewLen >= 0 && len(preview) > previewLen {
+		preview = preview[:previewLen]
+		truncated = true
+	}
+	data["body"] = string(preview)
+	data["body_truncated"] = truncated
 }
 
 // transportConfig holds the configuration for a WasmTransport.

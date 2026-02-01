@@ -5,6 +5,9 @@ import "encoding/json"
 // Manifest contains complete plugin metadata for introspection.
 // Used by both reglet and CLI tools to understand plugin capabilities.
 type Manifest struct {
+	// Registered services and operations
+	Services map[string]ServiceManifest `json:"services" yaml:"services"`
+
 	// Identity
 	Name        string `json:"name" yaml:"name"`
 	Version     string `json:"version" yaml:"version"`
@@ -14,14 +17,11 @@ type Manifest struct {
 	SDKVersion     string `json:"sdk_version" yaml:"sdk_version"`
 	MinHostVersion string `json:"min_host_version,omitempty" yaml:"min_host_version,omitempty"`
 
-	// Capabilities (http, dns, file, exec, etc.)
-	Capabilities []Capability `json:"capabilities" yaml:"capabilities"`
-
 	// Config schema (JSON Schema)
 	ConfigSchema json.RawMessage `json:"config_schema" yaml:"config_schema"`
 
-	// Registered services and operations
-	Services map[string]ServiceManifest `json:"services" yaml:"services"`
+	// Capabilities (http, dns, file, exec, etc.)
+	Capabilities []Capability `json:"capabilities" yaml:"capabilities"`
 }
 
 // ServiceManifest describes a service and its operations.

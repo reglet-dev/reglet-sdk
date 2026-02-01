@@ -1,4 +1,4 @@
-package grant_store
+package grantstore
 
 import (
 	"fmt"
