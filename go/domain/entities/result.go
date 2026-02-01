@@ -95,3 +95,23 @@ func (r Result) IsFailure() bool {
 func (r Result) IsError() bool {
 	return r.Status == ResultStatusError
 }
+
+// Pointer-returning helpers for cleaner handler code
+
+// ResultSuccessPtr creates a successful Result and returns a pointer to it.
+func ResultSuccessPtr(message string, data map[string]any) *Result {
+	r := ResultSuccess(message, data)
+	return &r
+}
+
+// ResultFailurePtr creates a failure Result and returns a pointer to it.
+func ResultFailurePtr(message string, data map[string]any) *Result {
+	r := ResultFailure(message, data)
+	return &r
+}
+
+// ResultErrorPtr creates an error Result and returns a pointer to it.
+func ResultErrorPtr(errType, message string) *Result {
+	r := ResultError(&ErrorDetail{Type: errType, Message: message})
+	return &r
+}

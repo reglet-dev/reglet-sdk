@@ -49,3 +49,10 @@ func FileSystemCapabilityLegacy(resource string) Capability {
 func ExecCapabilityLegacy(command string) Capability {
 	return NewCapability("exec", command)
 }
+
+// Common capabilities
+var (
+	// CapabilityHTTP represents a general HTTP network capability.
+	// In practice, plugins should request specific domains, but this is a broad capability.
+	CapabilityHTTP = NewCapability("network", "http")
+)
