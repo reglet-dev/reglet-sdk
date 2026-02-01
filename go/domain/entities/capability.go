@@ -35,24 +35,24 @@ func (c Capability) String() string {
 	return c.Category + ":" + c.Resource
 }
 
-// NetworkCapabilityLegacy creates a network capability.
-func NetworkCapabilityLegacy(resource string) Capability {
-	return NewCapability("network", resource)
-}
-
-// FileSystemCapabilityLegacy creates a filesystem capability.
-func FileSystemCapabilityLegacy(resource string) Capability {
-	return NewCapability("fs", resource)
-}
-
-// ExecCapabilityLegacy creates an exec capability.
-func ExecCapabilityLegacy(command string) Capability {
-	return NewCapability("exec", command)
-}
-
 // Common capabilities
 var (
 	// CapabilityHTTP represents a general HTTP network capability.
 	// In practice, plugins should request specific domains, but this is a broad capability.
 	CapabilityHTTP = NewCapability("network", "http")
+
+	// CapabilityDNS represents a DNS network capability.
+	CapabilityDNS = NewCapability("network", "dns")
+
+	// CapabilityFile represents a general file system capability.
+	CapabilityFile = NewCapability("fs", "**")
+
+	// CapabilityTCP represents a TCP network capability.
+	CapabilityTCP = NewCapability("network", "tcp")
+
+	// CapabilitySMTP represents an SMTP network capability.
+	CapabilitySMTP = NewCapability("network", "smtp")
+
+	// CapabilityExec represents a general execution capability.
+	CapabilityExec = NewCapability("exec", "**")
 )
