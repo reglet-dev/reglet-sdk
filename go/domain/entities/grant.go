@@ -51,7 +51,12 @@ func (g *GrantSet) mergeNetwork(other *NetworkCapability) {
 	if g.Network == nil {
 		g.Network = &NetworkCapability{}
 	}
-	g.Network.Rules = append(g.Network.Rules, other.Rules...)
+	// Only append rules that don't already exist
+	for _, rule := range other.Rules {
+		if !g.containsNetworkRule(rule) {
+			g.Network.Rules = append(g.Network.Rules, rule)
+		}
+	}
 }
 
 func (g *GrantSet) mergeFS(other *FileSystemCapability) {
@@ -61,7 +66,12 @@ func (g *GrantSet) mergeFS(other *FileSystemCapability) {
 	if g.FS == nil {
 		g.FS = &FileSystemCapability{}
 	}
-	g.FS.Rules = append(g.FS.Rules, other.Rules...)
+	// Only append rules that don't already exist
+	for _, rule := range other.Rules {
+		if !g.containsFSRule(rule) {
+			g.FS.Rules = append(g.FS.Rules, rule)
+		}
+	}
 }
 
 func (g *GrantSet) mergeEnv(other *EnvironmentCapability) {
@@ -71,7 +81,12 @@ func (g *GrantSet) mergeEnv(other *EnvironmentCapability) {
 	if g.Env == nil {
 		g.Env = &EnvironmentCapability{}
 	}
-	g.Env.Variables = append(g.Env.Variables, other.Variables...)
+	// Only append variables that don't already exist
+	for _, v := range other.Variables {
+		if !g.containsEnvVar(v) {
+			g.Env.Variables = append(g.Env.Variables, v)
+		}
+	}
 }
 
 func (g *GrantSet) mergeExec(other *ExecCapability) {
@@ -81,7 +96,12 @@ func (g *GrantSet) mergeExec(other *ExecCapability) {
 	if g.Exec == nil {
 		g.Exec = &ExecCapability{}
 	}
-	g.Exec.Commands = append(g.Exec.Commands, other.Commands...)
+	// Only append commands that don't already exist
+	for _, cmd := range other.Commands {
+		if !g.containsExecCmd(cmd) {
+			g.Exec.Commands = append(g.Exec.Commands, cmd)
+		}
+	}
 }
 
 func (g *GrantSet) mergeKV(other *KeyValueCapability) {
@@ -91,7 +111,12 @@ func (g *GrantSet) mergeKV(other *KeyValueCapability) {
 	if g.KV == nil {
 		g.KV = &KeyValueCapability{}
 	}
-	g.KV.Rules = append(g.KV.Rules, other.Rules...)
+	// Only append rules that don't already exist
+	for _, rule := range other.Rules {
+		if !g.containsKVRule(rule) {
+			g.KV.Rules = append(g.KV.Rules, rule)
+		}
+	}
 }
 
 // Clone returns a deep copy of the GrantSet.
@@ -144,6 +169,103 @@ func (g *GrantSet) Clone() *GrantSet {
 		}
 	}
 	return clone
+}
+
+// Deduplicate removes duplicate entries within this GrantSet's arrays.
+// This is different from Merge, which deduplicates when combining two GrantSets.
+// Use this to clean up a GrantSet that may have accumulated duplicates.
+func (g *GrantSet) Deduplicate() {
+	if g == nil {
+		return
+	}
+
+	// Deduplicate network rules
+	if g.Network != nil && len(g.Network.Rules) > 0 {
+		seen := make(map[string]bool)
+		unique := make([]NetworkRule, 0, len(g.Network.Rules))
+		for _, rule := range g.Network.Rules {
+			// Create a key for this rule
+			key := ""
+			for _, h := range rule.Hosts {
+				key += h + ","
+			}
+			key += ":"
+			for _, p := range rule.Ports {
+				key += p + ","
+			}
+			if !seen[key] {
+				seen[key] = true
+				unique = append(unique, rule)
+			}
+		}
+		g.Network.Rules = unique
+	}
+
+	// Deduplicate filesystem rules
+	if g.FS != nil && len(g.FS.Rules) > 0 {
+		seen := make(map[string]bool)
+		unique := make([]FileSystemRule, 0, len(g.FS.Rules))
+		for _, rule := range g.FS.Rules {
+			// Create a key for this rule
+			key := "r:"
+			for _, p := range rule.Read {
+				key += p + ","
+			}
+			key += "|w:"
+			for _, p := range rule.Write {
+				key += p + ","
+			}
+			if !seen[key] {
+				seen[key] = true
+				unique = append(unique, rule)
+			}
+		}
+		g.FS.Rules = unique
+	}
+
+	// Deduplicate environment variables
+	if g.Env != nil && len(g.Env.Variables) > 0 {
+		seen := make(map[string]bool)
+		unique := make([]string, 0, len(g.Env.Variables))
+		for _, v := range g.Env.Variables {
+			if !seen[v] {
+				seen[v] = true
+				unique = append(unique, v)
+			}
+		}
+		g.Env.Variables = unique
+	}
+
+	// Deduplicate exec commands
+	if g.Exec != nil && len(g.Exec.Commands) > 0 {
+		seen := make(map[string]bool)
+		unique := make([]string, 0, len(g.Exec.Commands))
+		for _, cmd := range g.Exec.Commands {
+			if !seen[cmd] {
+				seen[cmd] = true
+				unique = append(unique, cmd)
+			}
+		}
+		g.Exec.Commands = unique
+	}
+
+	// Deduplicate KV rules
+	if g.KV != nil && len(g.KV.Rules) > 0 {
+		seen := make(map[string]bool)
+		unique := make([]KeyValueRule, 0, len(g.KV.Rules))
+		for _, rule := range g.KV.Rules {
+			// Create a key for this rule
+			key := rule.Operation + ":"
+			for _, k := range rule.Keys {
+				key += k + ","
+			}
+			if !seen[key] {
+				seen[key] = true
+				unique = append(unique, rule)
+			}
+		}
+		g.KV.Rules = unique
+	}
 }
 
 // Difference returns capabilities in g that are not covered by other.

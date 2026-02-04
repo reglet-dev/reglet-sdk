@@ -85,7 +85,12 @@ func (s *FileStore) Load() (*entities.GrantSet, error) {
 
 // Save persists the granted capabilities.
 func (s *FileStore) Save(grants *entities.GrantSet) error {
-	data, err := yaml.Marshal(grants)
+	// Clone and deduplicate grants before saving to ensure the config file
+	// never contains duplicates, even if they accumulated in memory
+	clean := grants.Clone()
+	clean.Deduplicate()
+
+	data, err := yaml.Marshal(clean)
 	if err != nil {
 		return fmt.Errorf("failed to marshal grants: %w", err)
 	}
